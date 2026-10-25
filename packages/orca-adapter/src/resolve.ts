@@ -2,7 +2,11 @@ import { accessSync, constants } from 'node:fs'
 import path from 'node:path'
 
 export interface ResolveOptions {
-  env?: { PATH?: string | undefined }
+  /**
+   * Lookup environment for `PATH` and `OPC_ORCA_LIVE`.
+   * Omitted keys are not read from `process.env` when this object is passed.
+   */
+  env?: { PATH?: string | undefined; OPC_ORCA_LIVE?: string | undefined }
   platform?: string
 }
 

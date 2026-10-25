@@ -1,4 +1,8 @@
-/** Subcommands this adapter will eventually spawn. Flags are not a CLI contract yet. */
+/**
+ * Subcommands the adapter can spawn when live is on.
+ * Flag spellings are the adapter's (`--goal`, `--run-id`, …) until Phase 8
+ * checks them against the desktop CLI. They are not a guessed success.
+ */
 export type OrcaCommand =
   | 'status'
   | 'run-create'
@@ -51,7 +55,7 @@ export interface CheckInput {
   runId?: string
   /**
    * Dry-run records this caller flag as `true` or `false`. It is not an Orca
-   * result. Live calls ignore it and still refuse.
+   * result. Live calls do not copy it: stdout must print `converged:`.
    */
   converged?: boolean
 }
@@ -59,7 +63,8 @@ export interface CheckInput {
 export interface StatusInput {
   /**
    * Ignored. Dry-run does not copy a run id and does not return a status
-   * payload. Live calls ignore this too and still refuse.
+   * payload. Live calls do not copy it either. Status stdout must print
+   * `status:`; a run id is returned only when stdout prints `run-id:`.
    */
   runId?: string
 }
@@ -152,70 +157,123 @@ export interface PlannedOrcaCall {
   readonly args: Readonly<Record<string, string>>
 }
 
+/**
+ * Ids copied from live stdout. A key is present only when that field was
+ * parsed. Absent keys are not filled from the caller's arguments.
+ */
+export interface LiveOrcaIds {
+  runId?: string
+  taskId?: string
+  workerId?: string
+  messageId?: string
+  gateId?: string
+}
+
+/**
+ * A live CLI result. `exitCode` is 0 only because the process exited 0.
+ * `ids` come from stdout. This is not a dry-run plan and not a human PR yes.
+ */
+export interface LiveOrcaCall {
+  readonly dryRun: false
+  readonly live: true
+  readonly command: OrcaCommand
+  readonly exitCode: 0
+  readonly ids: Readonly<LiveOrcaIds>
+  readonly fields: Readonly<Record<string, string>>
+}
+
+export type OrcaCallResult = PlannedOrcaCall | LiveOrcaCall
+
 export interface OrcaAdapter {
   /** Absolute path of the resolved binary, or null when nothing is configured. */
   readonly executable: string | null
   /** True only when this adapter was created with `dryRun`. */
   readonly dryRun: boolean
+  /**
+   * True only when this adapter will spawn. Dry-run forces this false.
+   * Off unless `live: true` or `OPC_ORCA_LIVE=1`.
+   */
+  readonly live: boolean
   /** Plans recorded by dry-run dispatch, check, observation, reply, worker-release, and backend gates. Empty when `dryRun` is false. */
   readonly planned: readonly PlannedOrcaCall[]
   /**
    * Dry-run resolves a plan and does not require the CLI. The plan has no
-   * run id and no status payload. Otherwise the promise rejects with
-   * not-configured or not-implemented.
+   * run id and no status payload. With live off, the promise rejects with
+   * not-configured or not-implemented. With live on, it spawns and rejects
+   * with not-configured, spawn-failed, or unparseable instead of inventing
+   * a status payload.
    */
-  status(input?: StatusInput): Promise<PlannedOrcaCall>
+  status(input?: StatusInput): Promise<OrcaCallResult>
   /**
-   * Dry-run resolves a plan and does not require the CLI. Otherwise the
-   * promise rejects with not-configured or not-implemented and never
-   * resolves a run id.
+   * Dry-run resolves a plan and does not require the CLI. With live off, the
+   * promise rejects and never resolves a run id. With live on, a run id is
+   * returned only when stdout prints `run-id:`.
    */
-  runCreate(input: RunCreateInput): Promise<PlannedOrcaCall>
-  taskCreate(input: TaskCreateInput): Promise<PlannedOrcaCall>
+  runCreate(input: RunCreateInput): Promise<OrcaCallResult>
+  taskCreate(input: TaskCreateInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a run id.
-   * Otherwise the promise rejects with not-configured or not-implemented
-   * and never resolves a task list.
+   * With live off, the promise rejects and never resolves a task list.
+   * With live on, `tasks:` must be printed; a task id is not invented.
    */
-  taskList(input?: TaskListInput): Promise<PlannedOrcaCall>
-  workerStart(input: WorkerStartInput): Promise<PlannedOrcaCall>
+  taskList(input?: TaskListInput): Promise<OrcaCallResult>
+  workerStart(input: WorkerStartInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a worker id.
-   * Otherwise the promise rejects with not-configured or not-implemented
-   * and never resolves a worker record.
+   * With live off, the promise rejects and never resolves a worker record.
+   * With live on, a worker id is returned only when stdout prints `worker-id:`.
    */
-  workerShow(input?: WorkerShowInput): Promise<PlannedOrcaCall>
+  workerShow(input?: WorkerShowInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a worker id.
-   * Otherwise the promise rejects with not-configured or not-implemented
-   * and never resolves a worker id.
+   * With live off, the promise rejects and never resolves a worker id.
+   * With live on, a worker id is returned only when stdout prints `worker-id:`.
    */
-  workerRelease(input?: WorkerReleaseInput): Promise<PlannedOrcaCall>
+  workerRelease(input?: WorkerReleaseInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the caller's converged flag and does not
-   * require the CLI or a run id. Otherwise the promise rejects with
-   * not-configured or not-implemented and never resolves a run id.
+   * require the CLI or a run id. With live off, the promise rejects and
+   * never resolves a run id. With live on, `converged:` must be printed;
+   * the caller's flag is not copied.
    */
-  check(input: CheckInput): Promise<PlannedOrcaCall>
+  check(input: CheckInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the answer text and does not require the
-   * CLI or a run id. Otherwise the promise rejects with not-configured or
-   * not-implemented and never resolves a message id. This is not a human
-   * PR approval.
+   * CLI or a run id. With live off, the promise rejects and never resolves
+   * a message id. With live on, a message id is returned only when stdout
+   * prints `message-id:`. This is not a human PR approval.
    */
-  reply(input: ReplyInput): Promise<PlannedOrcaCall>
+  reply(input: ReplyInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the reason and does not require the CLI
-   * or a run id. Otherwise the promise rejects with not-configured or
-   * not-implemented and never resolves a gate id. This is an Orca backend
-   * gate, not a human PR approval.
+   * or a run id. With live off, the promise rejects and never resolves a
+   * gate id. With live on, a gate id is returned only when stdout prints
+   * `gate-id:`. This is an Orca backend gate, not a human PR approval.
    */
-  gateCreate(input: GateCreateInput): Promise<PlannedOrcaCall>
+  gateCreate(input: GateCreateInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the resolution and does not require the
-   * CLI or a gate id. Otherwise the promise rejects with not-configured or
-   * not-implemented and never resolves a gate id or an exit code. This is
-   * an Orca backend gate, not a human PR approval.
+   * CLI or a gate id. With live off, the promise rejects and never resolves
+   * a gate id or an exit code. With live on, exit 0 is returned only when
+   * the process exited 0, and a gate id only when stdout prints `gate-id:`.
+   * This is an Orca backend gate, not a human PR approval.
    */
+  gateResolve(input: GateResolveInput): Promise<OrcaCallResult>
+}
+
+/** Adapter created with `dryRun: true`. Every call resolves a plan and does not spawn. */
+export interface DryRunOrcaAdapter extends OrcaAdapter {
+  readonly dryRun: true
+  readonly live: false
+  status(input?: StatusInput): Promise<PlannedOrcaCall>
+  runCreate(input: RunCreateInput): Promise<PlannedOrcaCall>
+  taskCreate(input: TaskCreateInput): Promise<PlannedOrcaCall>
+  taskList(input?: TaskListInput): Promise<PlannedOrcaCall>
+  workerStart(input: WorkerStartInput): Promise<PlannedOrcaCall>
+  workerShow(input?: WorkerShowInput): Promise<PlannedOrcaCall>
+  workerRelease(input?: WorkerReleaseInput): Promise<PlannedOrcaCall>
+  check(input: CheckInput): Promise<PlannedOrcaCall>
+  reply(input: ReplyInput): Promise<PlannedOrcaCall>
+  gateCreate(input: GateCreateInput): Promise<PlannedOrcaCall>
   gateResolve(input: GateResolveInput): Promise<PlannedOrcaCall>
 }

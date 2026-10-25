@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { createOrcaAdapter, OrcaNotConfiguredError, OrcaStubError } from '@opc-orca/orca-adapter'
+import {
+  createOrcaAdapter,
+  OrcaNotConfiguredError,
+  OrcaParseError,
+  OrcaSpawnError,
+  OrcaStubError,
+} from '@opc-orca/orca-adapter'
 import type { OrcaAdapter, PlannedOrcaCall } from '@opc-orca/orca-adapter'
 
 import {
@@ -138,6 +144,10 @@ test('adapter wiring is an explicit TODO, not a silent success', () => {
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\breply\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-create\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-resolve\b/)
+  assert.match(WIRE_ADAPTER_TODO, /OPC_ORCA_LIVE/)
+  assert.match(WIRE_ADAPTER_TODO, /non-zero exit/)
+  assert.match(WIRE_ADAPTER_TODO, /unparseable stdout/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired: live spawn/)
 })
 
 test('dry-run waiting loop records the check plan and does not invent a run id', async () => {
@@ -249,6 +259,67 @@ test('live adapter rejection does not bind a run or invent an id', async () => {
   assert.deepEqual(presentLoop.snapshot().intents, [])
   assert.deepEqual(present.planned, [])
   assert.equal(presentLoop.snapshot().githubWritePerformed, false)
+})
+
+function liveScript(body: string): { dir: string; log: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), 'orca-live-loop-'))
+  const log = path.join(dir, 'spawn.log')
+  const file = path.join(dir, 'orca')
+  writeFileSync(file, `#!/bin/sh\nlog=${JSON.stringify(log)}\n${body}\n`)
+  chmodSync(file, 0o755)
+  return { dir, log }
+}
+
+test('live spawn failure and a live result do not advance the coordinator', async () => {
+  const missing = createOrcaAdapter({ live: true, env: { PATH: '' }, platform: 'linux' })
+  const missingLoop = createDigLoop({ adapter: missing, repo })
+  missingLoop.acceptGoal('fix the gate')
+  missingLoop.triage({ agentReady: true, difficulty: 'normal' })
+  await assert.rejects(() => missingLoop.bindRun(), OrcaNotConfiguredError)
+  assert.equal(missingLoop.state, 'plan')
+  assert.deepEqual(missingLoop.snapshot().intents, [])
+  assert.equal(missingLoop.snapshot().githubWritePerformed, false)
+  assert.notEqual(missingLoop.state, 'awaiting_human_pr')
+
+  const crashed = liveScript('printf \'run-id: run-abc\\n\'\nexit 3\n')
+  const crashedAdapter = createOrcaAdapter({ live: true, env: { PATH: crashed.dir }, platform: 'linux' })
+  const crashedLoop = createDigLoop({ adapter: crashedAdapter, repo })
+  crashedLoop.acceptGoal('fix the gate')
+  crashedLoop.triage({ agentReady: true, difficulty: 'normal' })
+  await assert.rejects(() => crashedLoop.bindRun(), (error: unknown) => {
+    assert.ok(error instanceof OrcaSpawnError)
+    assert.equal(error.exitCode, 3)
+    assert.equal(Object.hasOwn(error, 'runId'), false)
+    return true
+  })
+  assert.equal(crashedLoop.state, 'plan')
+  assert.deepEqual(crashedLoop.snapshot().intents, [])
+  assert.equal(JSON.stringify(crashedLoop.snapshot()).includes('run-abc'), false)
+  assert.equal(crashedLoop.snapshot().githubWritePerformed, false)
+
+  const garbled = liveScript('printf \'not a field\\n\'\nexit 0\n')
+  const garbledAdapter = createOrcaAdapter({ live: true, env: { PATH: garbled.dir }, platform: 'linux' })
+  const garbledLoop = createDigLoop({ adapter: garbledAdapter, repo })
+  garbledLoop.acceptGoal('fix the gate')
+  garbledLoop.triage({ agentReady: true, difficulty: 'normal' })
+  await assert.rejects(() => garbledLoop.bindRun(), OrcaParseError)
+  assert.equal(garbledLoop.state, 'plan')
+  assert.deepEqual(garbledLoop.snapshot().intents, [])
+  assert.equal(garbledLoop.snapshot().githubWritePerformed, false)
+
+  const ok = liveScript('printf \'%s\\n\' "$1" >> "$log"\nprintf \'run-id: run-abc\\n\'\nexit 0\n')
+  const okAdapter = createOrcaAdapter({ live: true, env: { PATH: ok.dir }, platform: 'linux' })
+  const okLoop = createDigLoop({ adapter: okAdapter, repo })
+  okLoop.acceptGoal('fix the gate')
+  okLoop.triage({ agentReady: true, difficulty: 'normal' })
+  await assert.rejects(() => okLoop.bindRun(), /refusing to treat an Orca result as success/)
+  assert.equal(okLoop.state, 'plan')
+  assert.equal(okLoop.snapshot().path, null)
+  assert.deepEqual(okLoop.snapshot().intents, [])
+  assert.equal(okLoop.snapshot().githubWritePerformed, false)
+  assert.notEqual(okLoop.state, 'awaiting_human_pr')
+  assert.equal(JSON.stringify(okLoop.snapshot()).includes('run-abc'), false)
+  assert.equal(readFileSync(ok.log, 'utf8').trim(), 'run-create')
 })
 
 function dispatchThen(check: OrcaAdapter['check']): OrcaAdapter {

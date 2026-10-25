@@ -1,4 +1,4 @@
-import { createOrcaAdapter, type OrcaAdapter, type PlannedOrcaCall } from '@opc-orca/orca-adapter'
+import { createOrcaAdapter, type OrcaAdapter, type OrcaCallResult, type PlannedOrcaCall } from '@opc-orca/orca-adapter'
 
 import { DuplicateVerdictError, IllegalTransitionError, InvalidVerdictError } from './errors.ts'
 import {
@@ -27,8 +27,9 @@ export interface DigLoop {
    */
   bindRun(): Promise<void>
   /**
-   * Calls the adapter for `worker-start` (dsh, new-child). Does not spawn.
-   * A rejection leaves the state on `run_bound`.
+   * Calls the adapter for `worker-start` (dsh, new-child). The default adapter
+   * does not spawn. A rejection leaves the state on `run_bound`. A live
+   * result is not a dry-run plan and does not move state.
    */
   startWorker(): Promise<void>
   /**
@@ -121,13 +122,16 @@ export interface DigLoopOptions {
    * Adapter for normal-task dispatch, the waiting-loop check, observation
    * (`status`, `task-list`, `worker-show`), `reply` while waiting, backend
    * `gate-create` and `gate-resolve` while waiting, and `worker-release`
-   * after converging. Default: dry-run, no binary required. A live adapter
-   * is called the same way and must reject; the loop does not invent a run
-   * id or a gate id from that rejection. A rejected check is not converged.
-   * A rejected observation is not a successful read. A rejected reply is not
-   * an answer and is not the human PR yes. A rejected gate is not a created
-   * or resolved backend gate and is not the human PR yes. A rejected
-   * worker-release is not a released worker.
+   * after converging. Default: dry-run, no binary required, even if
+   * `OPC_ORCA_LIVE=1` is set in the process environment. A live failure
+   * (`not-configured`, `not-implemented`, `spawn-failed`, `unparseable`)
+   * rejects. The loop does not invent a run id or a gate id from that
+   * rejection, and it does not store a live result: only a dry-run plan
+   * moves state. A rejected check is not converged. A rejected observation
+   * is not a successful read. A rejected reply is not an answer and is not
+   * the human PR yes. A rejected gate is not a created or resolved backend
+   * gate and is not the human PR yes. A rejected worker-release is not a
+   * released worker.
    */
   adapter?: OrcaAdapter
   /** Repository passed to run-create. Required before `bindRun`. */
@@ -140,8 +144,8 @@ function toIntent(call: PlannedOrcaCall): Intent {
   return { command: call.command, args: { ...call.args } }
 }
 
-/** A dry-run plan is the only adapter result this loop may store. */
-function requireDryPlan(call: PlannedOrcaCall, command: PlannedOrcaCall['command']): void {
+/** A dry-run plan is the only adapter result this loop may store. A live result is refused. */
+function requireDryPlan(call: OrcaCallResult, command: PlannedOrcaCall['command']): asserts call is PlannedOrcaCall {
   if (call.dryRun !== true || call.command !== command) {
     throw new TypeError('refusing to treat an Orca result as success')
   }
@@ -232,7 +236,7 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
   const observe = (
     command: 'status' | 'task-list' | 'worker-show',
     action: string,
-    call: () => Promise<PlannedOrcaCall>,
+    call: () => Promise<OrcaCallResult>,
   ): Promise<void> => {
     need(['waiting'], action)
     if (adapterBusy) {

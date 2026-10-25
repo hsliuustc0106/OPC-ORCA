@@ -63,7 +63,7 @@ FlyBot roles collapse onto two processes here: the **coordinator** (intake, tria
 
 ## Not in this phase
 
-- Spawn of `orca` / `orca-ide` that creates a run
+- Treating a live `orca` / `orca-ide` spawn as dig-loop success (the adapter can spawn behind `OPC_ORCA_LIVE=1`; this gate still does not)
 - `gh pr create`, `gh pr edit`, `git push`, `gh pr merge`
 - Auto-merge, merge queue, required `merge-gate`
 - A reviewer login list that grants merge rights (the policy file is empty on purpose)
