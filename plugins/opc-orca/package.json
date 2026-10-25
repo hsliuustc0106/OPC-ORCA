@@ -2,7 +2,7 @@
   "name": "@opc-orca/plugin",
   "version": "0.0.0",
   "private": true,
-  "description": "DeepSeek Harness plugin stub for OPC-ORCA. v0 registers no tools and performs no GitHub writes.",
+  "description": "DeepSeek Harness plugin for OPC-ORCA. Registers a dig tool that runs the coordinator. Default dry-run. Does not open, update, or merge a pull request.",
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
@@ -19,7 +19,10 @@
     "index.js",
     "README.md"
   ],
+  "dependencies": {
+    "@opc-orca/coordinator": "0.0.0"
+  },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "test": "node --experimental-strip-types --test test/*.test.js"
   }
 }

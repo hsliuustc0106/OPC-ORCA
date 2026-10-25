@@ -147,6 +147,9 @@ test('adapter wiring is an explicit TODO, not a silent success', () => {
   assert.match(WIRE_ADAPTER_TODO, /OPC_ORCA_LIVE/)
   assert.match(WIRE_ADAPTER_TODO, /non-zero exit/)
   assert.match(WIRE_ADAPTER_TODO, /unparseable stdout/)
+  assert.match(WIRE_ADAPTER_TODO, /parsed live result/)
+  assert.match(WIRE_ADAPTER_TODO, /does not advance/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /stores only dry-run plans/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired: live spawn/)
 })
 
@@ -270,7 +273,7 @@ function liveScript(body: string): { dir: string; log: string } {
   return { dir, log }
 }
 
-test('live spawn failure and a live result do not advance the coordinator', async () => {
+test('live spawn failure does not advance the coordinator', async () => {
   const missing = createOrcaAdapter({ live: true, env: { PATH: '' }, platform: 'linux' })
   const missingLoop = createDigLoop({ adapter: missing, repo })
   missingLoop.acceptGoal('fix the gate')
@@ -307,19 +310,245 @@ test('live spawn failure and a live result do not advance the coordinator', asyn
   assert.deepEqual(garbledLoop.snapshot().intents, [])
   assert.equal(garbledLoop.snapshot().githubWritePerformed, false)
 
-  const ok = liveScript('printf \'%s\\n\' "$1" >> "$log"\nprintf \'run-id: run-abc\\n\'\nexit 0\n')
-  const okAdapter = createOrcaAdapter({ live: true, env: { PATH: ok.dir }, platform: 'linux' })
-  const okLoop = createDigLoop({ adapter: okAdapter, repo })
-  okLoop.acceptGoal('fix the gate')
-  okLoop.triage({ agentReady: true, difficulty: 'normal' })
-  await assert.rejects(() => okLoop.bindRun(), /refusing to treat an Orca result as success/)
-  assert.equal(okLoop.state, 'plan')
-  assert.equal(okLoop.snapshot().path, null)
-  assert.deepEqual(okLoop.snapshot().intents, [])
-  assert.equal(okLoop.snapshot().githubWritePerformed, false)
-  assert.notEqual(okLoop.state, 'awaiting_human_pr')
-  assert.equal(JSON.stringify(okLoop.snapshot()).includes('run-abc'), false)
-  assert.equal(readFileSync(ok.log, 'utf8').trim(), 'run-create')
+  const half = liveScript(`
+printf '%s\\n' "$@" >> "$log"
+case "$1" in
+  run-create) printf 'run-id: run-abc\\n' ;;
+  *) printf 'not a field\\n' ;;
+esac
+`)
+  const halfAdapter = createOrcaAdapter({ live: true, env: { PATH: half.dir }, platform: 'linux' })
+  const halfLoop = createDigLoop({ adapter: halfAdapter, repo })
+  halfLoop.acceptGoal('fix the gate')
+  halfLoop.triage({ agentReady: true, difficulty: 'normal' })
+  await assert.rejects(() => halfLoop.bindRun(), OrcaParseError)
+  assert.equal(halfLoop.state, 'plan')
+  assert.equal(halfLoop.snapshot().path, null)
+  assert.deepEqual(halfLoop.snapshot().intents, [])
+  assert.equal(JSON.stringify(halfLoop.snapshot()).includes('run-abc'), false)
+  assert.equal(halfLoop.snapshot().githubWritePerformed, false)
+  assert.notEqual(halfLoop.state, 'awaiting_human_pr')
+})
+
+const liveProtocol = `
+printf '%s\\n' "$@" >> "$log"
+case "$1" in
+  run-create) printf 'run-id: run-abc\\n' ;;
+  task-create) printf 'task-id: task-abc\\n' ;;
+  worker-start) printf 'worker-id: worker-abc\\n' ;;
+  worker-show) printf 'worker-id: worker-abc\\n' ;;
+  worker-release) printf 'worker-id: worker-abc\\n' ;;
+  check)
+    count=$(grep -c '^check$' "$log")
+    if [ "$count" -le 1 ]; then printf 'converged: false\\n'; else printf 'converged: true\\n'; fi
+    ;;
+  status) printf 'status: waiting\\n' ;;
+  task-list) printf 'tasks: none\\n' ;;
+  reply) printf 'message-id: msg-abc\\n' ;;
+  gate-create) printf 'gate-id: gate-abc\\n' ;;
+  gate-resolve) printf 'gate-id: gate-done\\n' ;;
+  *) printf 'unknown\\n' >&2; exit 1 ;;
+esac
+`
+
+function argvGroups(log: string): string[][] {
+  const commands = new Set([
+    'run-create',
+    'task-create',
+    'worker-start',
+    'worker-show',
+    'worker-release',
+    'check',
+    'status',
+    'task-list',
+    'reply',
+    'gate-create',
+    'gate-resolve',
+  ])
+  const groups: string[][] = []
+  let current: string[] | null = null
+  for (const line of log.trim().split('\n')) {
+    if (commands.has(line)) {
+      current = [line]
+      groups.push(current)
+    } else if (current) {
+      current.push(line)
+    }
+  }
+  return groups
+}
+
+test('a parsed live result advances the coordinator and still stops for a human', async () => {
+  const ok = liveScript(liveProtocol)
+  const adapter = createOrcaAdapter({ live: true, env: { PATH: ok.dir }, platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  assert.equal(loop.state, 'run_bound')
+  assert.equal(loop.snapshot().path, 'orca-worker')
+  assert.equal(loop.snapshot().intents[0]?.args.runId, 'run-abc')
+  assert.equal(loop.snapshot().intents[0]?.args.goal, undefined)
+  assert.equal(loop.snapshot().intents[1]?.args.taskId, 'task-abc')
+  assert.equal(loop.snapshot().intents[1]?.args.runId, undefined)
+  await loop.startWorker()
+  assert.equal(loop.state, 'dispatched')
+  assert.equal(loop.snapshot().intents[2]?.args.workerId, 'worker-abc')
+
+  await loop.check({ converged: true })
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().intents[3]?.args.converged, 'false')
+  assert.equal(loop.snapshot().intents[3]?.args.runId, undefined)
+
+  await loop.status()
+  await loop.taskList()
+  await loop.workerShow()
+  await loop.reply({ text: 'ship the tip' })
+  await loop.gateCreate({ reason: 'worker blocked' })
+  await loop.gateResolve({ resolution: 'continue' })
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(loop.snapshot().intents.at(-6)?.args.status, 'waiting')
+  assert.deepEqual(loop.snapshot().intents.at(-5)?.args, { tasks: 'none' })
+  assert.deepEqual(loop.snapshot().intents.at(-4)?.args, { workerId: 'worker-abc' })
+  assert.deepEqual(loop.snapshot().intents.at(-3)?.args, { messageId: 'msg-abc' })
+  assert.deepEqual(loop.snapshot().intents.at(-2)?.args, { gateId: 'gate-abc' })
+  assert.deepEqual(loop.snapshot().intents.at(-1)?.args, { gateId: 'gate-done' })
+
+  await loop.check({ converged: false })
+  assert.equal(loop.state, 'converging')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'true')
+  assert.notEqual(loop.state, 'awaiting_human_pr')
+  await loop.workerRelease()
+  assert.equal(loop.state, 'converging')
+  assert.deepEqual(loop.snapshot().intents.at(-1)?.args, { workerId: 'worker-abc' })
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+
+  loop.askHumanPr({ sha: 'abc123', verdict })
+  assert.equal(loop.state, 'awaiting_human_pr')
+  loop.humanPrDecision('yes', 'open')
+  assert.equal(loop.state, 'done')
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.deepEqual(loop.snapshot().humanDecision, { answer: 'yes', action: 'open' })
+
+  const groups = argvGroups(readFileSync(ok.log, 'utf8'))
+  assert.deepEqual(groups[0]?.slice(0, 7), [
+    'run-create',
+    '--goal',
+    'fix the gate',
+    '--repo',
+    repo,
+    '--base',
+    'origin/main',
+  ])
+  assert.deepEqual(groups[1]?.slice(0, 3), ['task-create', '--run-id', 'run-abc'])
+  assert.equal(groups[1]?.includes('--worker'), true)
+  assert.equal(groups[1]?.includes('dsh'), true)
+  assert.equal(groups[1]?.includes('new-child'), true)
+  assert.deepEqual(groups[2]?.slice(0, 3), ['worker-start', '--task-id', 'task-abc'])
+  assert.deepEqual(groups[3]?.slice(0, 3), ['check', '--run-id', 'run-abc'])
+  assert.equal(groups[3]?.includes('--converged'), false)
+  assert.equal(groups.some((group) => group[0] === 'gate-resolve' && group.includes('gate-abc')), true)
+  assert.equal(groups.some((group) => group.includes('run-supplied')), false)
+  assert.deepEqual(adapter.planned, [])
+})
+
+test('a non-zero live check does not advance and does not keep stdout ids', async () => {
+  const crashed = liveScript(`
+printf '%s\\n' "$@" >> "$log"
+case "$1" in
+  run-create) printf 'run-id: run-ok\\n' ;;
+  task-create) printf 'task-id: task-ok\\n' ;;
+  worker-start) printf 'worker-id: worker-ok\\n' ;;
+  check) printf 'run-id: run-nope\\n'; exit 5 ;;
+  *) exit 1 ;;
+esac
+`)
+  const adapter = createOrcaAdapter({ live: true, env: { PATH: crashed.dir }, platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  await loop.startWorker()
+  assert.equal(loop.state, 'dispatched')
+  await assert.rejects(
+    () => loop.check({ converged: true }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaSpawnError)
+      assert.equal(error.exitCode, 5)
+      assert.equal(Object.hasOwn(error, 'runId'), false)
+      return true
+    },
+  )
+  assert.equal(loop.state, 'dispatched')
+  assert.deepEqual(
+    loop.snapshot().intents.map((intent) => intent.command),
+    ['run-create', 'task-create', 'worker-start'],
+  )
+  assert.equal(loop.snapshot().intents[0]?.args.runId, 'run-ok')
+  assert.equal(JSON.stringify(loop.snapshot()).includes('run-nope'), false)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.notEqual(loop.state, 'awaiting_human_pr')
+  assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+})
+
+test('unparseable live check stdout does not advance', async () => {
+  const garbled = liveScript(`
+case "$1" in
+  run-create) printf 'run-id: run-ok\\n' ;;
+  task-create) printf 'task-id: task-ok\\n' ;;
+  worker-start) printf 'worker-id: worker-ok\\n' ;;
+  check) printf 'converged: maybe\\n' ;;
+  *) exit 1 ;;
+esac
+`)
+  const adapter = createOrcaAdapter({ live: true, env: { PATH: garbled.dir }, platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  await loop.startWorker()
+  await assert.rejects(() => loop.check({ converged: true }), OrcaParseError)
+  assert.equal(loop.state, 'dispatched')
+  assert.equal(
+    loop.snapshot().intents.some((intent) => intent.command === 'check'),
+    false,
+  )
+  assert.equal(JSON.stringify(loop.snapshot()).includes('maybe'), false)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+})
+
+test('a live result missing its parsed id does not advance', async () => {
+  let taskCalls = 0
+  const adapter = {
+    executable: '/tmp/orca',
+    dryRun: false,
+    live: true,
+    planned: [],
+    async runCreate() {
+      return {
+        dryRun: false as const,
+        live: true as const,
+        command: 'run-create' as const,
+        exitCode: 0 as const,
+        ids: {},
+        fields: {},
+      }
+    },
+    async taskCreate() {
+      taskCalls += 1
+      throw new Error('task-create must not run without a parsed run id')
+    },
+  } as unknown as OrcaAdapter
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await assert.rejects(() => loop.bindRun(), /missing runId/)
+  assert.equal(taskCalls, 0)
+  assert.equal(loop.state, 'plan')
+  assert.deepEqual(loop.snapshot().intents, [])
+  assert.equal(loop.snapshot().githubWritePerformed, false)
 })
 
 function dispatchThen(check: OrcaAdapter['check']): OrcaAdapter {
