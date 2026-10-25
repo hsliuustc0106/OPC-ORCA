@@ -1,6 +1,6 @@
 # Coordinator workflow
 
-The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, `worker-start`, and `check`, and store that plan as intents. While `waiting`, they may also record `status`, `task-list`, `worker-show`, and `reply`. Those plans do not converge. `reply` is a worker-side answer and is not the human PR yes. After `converging`, the Orca worker path may record `worker-release`. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id, a worker id, a message id, a status payload, or treat the throw as converged. Commands that are still only named, not called, stay on `WIRE_ADAPTER_TODO`.
+The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, `worker-start`, and `check`, and store that plan as intents. While `waiting`, they may also record `status`, `task-list`, `worker-show`, `reply`, `gate-create`, and `gate-resolve`. Those plans do not converge. `reply` is a worker-side answer and is not the human PR yes. `gate-create` and `gate-resolve` are Orca backend gates for a worker or task decision. They are not the human PR yes and do not move `awaiting_human_pr`. After `converging`, the Orca worker path may record `worker-release`. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id, a worker id, a message id, a gate id, a status payload, or treat the throw as converged. Live spawn stays on `WIRE_ADAPTER_TODO`.
 
 ```
 intake
@@ -10,7 +10,7 @@ intake
           → converging               (easy: coordinator-direct)
           → run_bound                (normal: run-create + task-create)
               → dispatched           (worker-start)
-                  → waiting          (check not converged; may record status, task-list, worker-show, reply)
+                  → waiting          (check not converged; may record status, task-list, worker-show, reply, gate-create, gate-resolve)
                   → converging       (check converged; may record worker-release)
           → awaiting_human_pr        (PR ask — stop)
               → done                 (human yes or no; still no GitHub write)
@@ -33,7 +33,7 @@ Decide whether the goal is ready to dig.
 
 `plan` is where the path splits.
 
-- **Easy → coordinator-direct.** The coordinator does the work in the current checkout. No `run-create`, no `task-create`, no `worker-start`, no `check`, no observation, no `reply`, and no `worker-release`. Next state: `converging`.
+- **Easy → coordinator-direct.** The coordinator does the work in the current checkout. No `run-create`, no `task-create`, no `worker-start`, no `check`, no observation, no `reply`, no `gate-create`, no `gate-resolve`, and no `worker-release`. Next state: `converging`.
 - **Normal → Orca.** Next step is run-create. The coordinator will not take the direct path for a normal task.
 
 ### 4. Run-create and task-create (`run_bound`)
@@ -64,6 +64,8 @@ While the state is `waiting`, the coordinator may call `status`, `task-list`, an
 
 While the state is `waiting`, the coordinator may also call `reply` in dry-run to answer a worker ask. The plan records the answer text and no run id, message id, or exit code. The state stays `waiting`. Reply does not enter `converging` and does not enter `awaiting_human_pr`. It is not the human PR yes and it is not a substitute for `check`. A throw (`not-configured` or `not-implemented`) leaves the state on `waiting` and stores no reply intent. Calling reply before `waiting`, or after the state has left `waiting`, is an illegal transition.
 
+While the state is `waiting`, the coordinator may call `gate-create` and `gate-resolve` in dry-run. These are Orca backend gates for a worker or task decision. `gate-create` records the reason and no run id or gate id. `gate-resolve` records the resolution and no gate id or exit code. The state stays `waiting`. Neither call enters `converging` or `awaiting_human_pr`. Neither call is the human PR yes, and neither opens, updates, or merges a pull request. A throw (`not-configured` or `not-implemented`) leaves the state on `waiting` and stores no intent for that call. Calling either command before `waiting`, or after the state has left `waiting`, is an illegal transition. The coordinator-direct path never reaches `waiting`, so it does not record these gates.
+
 ### 7. Converge (`converging`)
 
 Both paths meet here. The loop is not done. It still needs one verdict and a human.
@@ -83,7 +85,7 @@ Written-by: Reviewer
 
 A second verdict for the same SHA throws. A later SHA, recorded with `noteVerdict` while still in `awaiting_human_pr`, replaces the previous verdict (the new commit voided it). The state stays `awaiting_human_pr`.
 
-The ask is one of: **open** a draft, **update** the pull request, or **merge** it. The machine waits. A `reply` recorded while `waiting` is not this ask and is not a yes for open, update, or merge.
+The ask is one of: **open** a draft, **update** the pull request, or **merge** it. The machine waits. A `reply` recorded while `waiting` is not this ask and is not a yes for open, update, or merge. A `gate-create` or `gate-resolve` recorded while `waiting` is not this ask either. Resolving a backend gate does not enter `awaiting_human_pr`.
 
 ### 9. Human answer (`done`)
 
@@ -99,6 +101,6 @@ Easy means the coordinator can hold the whole change: no Orca run, no dispatched
 
 Normal means Orca owns execution. The path is `plan` → `run_bound` → `dispatched` → `waiting` → `converging` → `awaiting_human_pr` → `done`. Calling the direct path on a normal task is an illegal transition.
 
-## Adapter commands not used by this loop yet
+## Backend gates are not the human PR yes
 
-`gate-create` and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not call them. `gate-resolve` must not be used as a stand-in for the human PR yes. `reply` must not either: it answers a worker while `waiting` and does not move `awaiting_human_pr`. `status`, `task-list`, and `worker-show` are observation while `waiting`. They do not stand in for `check`.
+`gate-create` and `gate-resolve` run while `waiting`. They record an Orca decision for the worker or task. `gate-resolve` must not be used as a stand-in for the human PR yes, and neither call moves `awaiting_human_pr`. `reply` must not either: it answers a worker while `waiting` and does not move `awaiting_human_pr`. `status`, `task-list`, and `worker-show` are observation while `waiting`. They do not stand in for `check`. Live spawn of `orca` stays unwired.

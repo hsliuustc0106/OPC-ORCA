@@ -2,6 +2,8 @@ import { OrcaNotConfiguredError, OrcaStubError } from './errors.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
 import type {
   CheckInput,
+  GateCreateInput,
+  GateResolveInput,
   OrcaAdapter,
   OrcaCommand,
   OrcaWorker,
@@ -22,9 +24,9 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
   /**
    * Record planned run-create, task-create, worker-start, check, the
    * observation commands status, task-list, and worker-show, plus
-   * worker-release and reply.
+   * worker-release, reply, gate-create, and gate-resolve.
    * Does not spawn and does not require the `orca` binary.
-   * Default false: those calls reject and never resolve an id, a message id, or a status payload.
+   * Default false: those calls reject and never resolve an id, a message id, a gate id, or a status payload.
    */
   dryRun?: boolean
 }
@@ -35,7 +37,9 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
  * stdout. Do not add a process spawn until that parser exists, and never
  * synthesize a run id, task id, worker id, message id, gate id, exit code 0, or status payload.
  * `dryRun` returns before that refusal and only for run-create, task-create,
- * worker-start, check, status, task-list, worker-show, worker-release, and reply.
+ * worker-start, check, status, task-list, worker-show, worker-release, reply,
+ * gate-create, and gate-resolve. Gate plans are backend decisions. They are
+ * not a human PR yes.
  */
 async function refuse(bin: string | null, platform: string, command: OrcaCommand): Promise<never> {
   if (!bin) {
@@ -174,15 +178,25 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       // runId is not copied. Dry-run must not look like a sent message.
       return plan(planned, 'reply', { text: input.text })
     },
-    async gateCreate(input) {
-      required(input.runId, 'runId')
+    async gateCreate(input: GateCreateInput) {
+      if (!dryRun) {
+        required(input.runId, 'runId')
+        required(input.reason, 'reason')
+        return refuse(executable, platform, 'gate-create')
+      }
       required(input.reason, 'reason')
-      return refuse(executable, platform, 'gate-create')
+      // runId is not copied. Dry-run must not look like a created gate.
+      return plan(planned, 'gate-create', { reason: input.reason })
     },
-    async gateResolve(input) {
-      required(input.gateId, 'gateId')
+    async gateResolve(input: GateResolveInput) {
+      if (!dryRun) {
+        required(input.gateId, 'gateId')
+        required(input.resolution, 'resolution')
+        return refuse(executable, platform, 'gate-resolve')
+      }
       required(input.resolution, 'resolution')
-      return refuse(executable, platform, 'gate-resolve')
+      // gateId is not copied. Dry-run must not look like a resolved gate.
+      return plan(planned, 'gate-resolve', { resolution: input.resolution })
     },
   }
 }

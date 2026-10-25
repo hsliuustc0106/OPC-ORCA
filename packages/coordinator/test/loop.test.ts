@@ -127,14 +127,17 @@ test('adapter wiring is an explicit TODO, not a silent success', () => {
   assert.match(WIRE_ADAPTER_TODO, /reply may be called in dryRun/)
   assert.match(WIRE_ADAPTER_TODO, /is not the human PR yes/)
   assert.match(WIRE_ADAPTER_TODO, /worker-release may be called in dryRun/)
+  assert.match(WIRE_ADAPTER_TODO, /gate-create and gate-resolve may be called in dryRun/)
+  assert.match(WIRE_ADAPTER_TODO, /do not move awaiting_human_pr/)
+  assert.match(WIRE_ADAPTER_TODO, /not a substitute for the human PR yes/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bcheck\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bstatus\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\btask-list\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-show\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-release\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\breply\b/)
-  assert.match(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-create\b/)
-  assert.match(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-resolve\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-create\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-resolve\b/)
 })
 
 test('dry-run waiting loop records the check plan and does not invent a run id', async () => {
@@ -198,6 +201,8 @@ test('easy path does not record an Orca plan', () => {
   assert.throws(() => loop.workerShow(), IllegalTransitionError)
   assert.throws(() => loop.reply({ text: 'yes' }), IllegalTransitionError)
   assert.throws(() => loop.workerRelease(), IllegalTransitionError)
+  assert.throws(() => loop.gateCreate({ reason: 'worker blocked' }), IllegalTransitionError)
+  assert.throws(() => loop.gateResolve({ resolution: 'yes' }), IllegalTransitionError)
   assert.deepEqual(adapter.planned, [])
 })
 
@@ -903,5 +908,281 @@ test('a worker-release plan with an id or a payload is not stored', async () => 
     )
     assert.equal(loop.snapshot().humanDecision, null)
     assert.equal(loop.snapshot().githubWritePerformed, false)
+  }
+})
+
+function withGates(
+  handlers: {
+    gateCreate?: (input: { reason: string }) => Promise<PlannedOrcaCall>
+    gateResolve?: (input: { resolution: string }) => Promise<PlannedOrcaCall>
+  } = {},
+): OrcaAdapter {
+  const base = withReplyRelease()
+  return {
+    ...base,
+    async gateCreate(input: { reason: string }) {
+      if (handlers.gateCreate) return handlers.gateCreate(input)
+      return { dryRun: true, command: 'gate-create', args: { reason: input.reason } }
+    },
+    async gateResolve(input: { resolution: string }) {
+      if (handlers.gateResolve) return handlers.gateResolve(input)
+      return { dryRun: true, command: 'gate-resolve', args: { resolution: input.resolution } }
+    },
+  } as OrcaAdapter
+}
+
+test('backend gates while waiting record plans and do not reach the human PR gate', async () => {
+  const adapter = createOrcaAdapter({ dryRun: true, env: { PATH: '' }, platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  await loop.startWorker()
+  assert.throws(() => loop.gateCreate({ reason: 'worker blocked' }), IllegalTransitionError)
+  assert.throws(() => loop.gateResolve({ resolution: 'continue' }), IllegalTransitionError)
+  assert.equal(loop.state, 'dispatched')
+  assert.equal(
+    adapter.planned.some((call) => call.command === 'gate-create' || call.command === 'gate-resolve'),
+    false,
+  )
+  await loop.check({ converged: false })
+  assert.throws(() => loop.gateCreate({ reason: ' ' }), TypeError)
+  assert.throws(() => loop.gateCreate({ reason: '' }), TypeError)
+  assert.throws(() => loop.gateResolve({ resolution: ' ' }), TypeError)
+  assert.throws(() => loop.gateResolve({ resolution: '' }), TypeError)
+  await loop.gateCreate({ reason: '  worker blocked  ' })
+  await loop.gateResolve({ resolution: 'continue' })
+  await loop.gateCreate({ reason: 'need a task decision' })
+  await loop.gateResolve({ resolution: 'yes' })
+  await loop.gateResolve({ resolution: 'open' })
+  await loop.gateResolve({ resolution: 'merge' })
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().tipSha, null)
+  assert.equal(loop.snapshot().verdict, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(loop.state, 'waiting')
+  const gates = loop.snapshot().intents.filter((intent) => intent.command === 'gate-create' || intent.command === 'gate-resolve')
+  assert.deepEqual(
+    gates.map((intent) => ({ command: intent.command, args: intent.args })),
+    [
+      { command: 'gate-create', args: { reason: 'worker blocked' } },
+      { command: 'gate-resolve', args: { resolution: 'continue' } },
+      { command: 'gate-create', args: { reason: 'need a task decision' } },
+      { command: 'gate-resolve', args: { resolution: 'yes' } },
+      { command: 'gate-resolve', args: { resolution: 'open' } },
+      { command: 'gate-resolve', args: { resolution: 'merge' } },
+    ],
+  )
+  for (const intent of gates) {
+    assert.equal(intent.args.runId, undefined)
+    assert.equal(intent.args.gateId, undefined)
+    assert.equal(intent.args.exitCode, undefined)
+    assert.equal(intent.args.taskId, undefined)
+    assert.equal(intent.args.workerId, undefined)
+  }
+  assert.ok(!gates.some((intent) => /pr-|merge|github/i.test(intent.command)))
+  assert.deepEqual(
+    adapter.planned
+      .filter((call) => call.command === 'gate-create' || call.command === 'gate-resolve')
+      .map((call) => ({ command: call.command, args: call.args })),
+    gates.map((intent) => ({ command: intent.command, args: intent.args })),
+  )
+  await loop.check({ converged: true })
+  assert.equal(loop.state, 'converging')
+  assert.throws(() => loop.gateCreate({ reason: 'too late' }), IllegalTransitionError)
+  assert.throws(() => loop.gateResolve({ resolution: 'yes' }), IllegalTransitionError)
+  assert.equal(loop.snapshot().intents.filter((intent) => intent.command === 'gate-create').length, 2)
+  assert.equal(loop.snapshot().intents.filter((intent) => intent.command === 'gate-resolve').length, 4)
+  loop.askHumanPr({ sha: 'abc123', verdict })
+  assert.equal(loop.state, 'awaiting_human_pr')
+  assert.throws(() => loop.gateCreate({ reason: 'yes' }), IllegalTransitionError)
+  assert.throws(() => loop.gateResolve({ resolution: 'merge' }), IllegalTransitionError)
+  assert.equal(loop.state, 'awaiting_human_pr')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.equal(loop.snapshot().intents.at(-1)?.command, 'check')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'true')
+})
+
+test('a thrown backend gate is not success and does not leave waiting', async () => {
+  const notConfigured = new OrcaNotConfiguredError('orca CLI not found. gate-create is not configured.')
+  const blocked = await waitingLoop(
+    withGates({
+      gateCreate: async () => {
+        throw notConfigured
+      },
+    }),
+  )
+  await assert.rejects(
+    () => blocked.gateCreate({ reason: 'worker blocked' }),
+    (caught: unknown) => caught === notConfigured,
+  )
+  assert.equal(blocked.state, 'waiting')
+  assert.equal(blocked.snapshot().humanDecision, null)
+  assert.equal(
+    blocked.snapshot().intents.some((intent) => intent.command === 'gate-create' || intent.command === 'gate-resolve'),
+    false,
+  )
+  assert.equal(blocked.snapshot().githubWritePerformed, false)
+  assert.throws(() => blocked.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(blocked.state, 'waiting')
+
+  const notImplemented = new OrcaStubError(
+    'refusing to spawn orca gate-resolve: v0 stub, no success is returned',
+    ['orca', 'gate-resolve'],
+  )
+  const loop = await waitingLoop(
+    withGates({
+      gateResolve: async () => {
+        throw notImplemented
+      },
+    }),
+  )
+  await loop.gateCreate({ reason: 'worker blocked' })
+  await assert.rejects(
+    () => loop.gateResolve({ resolution: 'yes' }),
+    (caught: unknown) => {
+      assert.equal(caught, notImplemented)
+      assert.ok(caught instanceof OrcaStubError)
+      assert.equal(caught.code, 'not-implemented')
+      return true
+    },
+  )
+  assert.equal(loop.state, 'waiting')
+  assert.deepEqual(
+    loop.snapshot().intents.filter((intent) => intent.command === 'gate-create' || intent.command === 'gate-resolve'),
+    [{ command: 'gate-create', args: { reason: 'worker blocked' } }],
+  )
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(loop.state, 'waiting')
+})
+
+test('a backend gate plan with an id or the wrong text is not stored', async () => {
+  const cases: Array<{
+    call: (loop: Awaited<ReturnType<typeof waitingLoop>>) => Promise<void>
+    handlers: Parameters<typeof withGates>[0]
+    message: RegExp
+  }> = [
+    {
+      call: (loop) => loop.gateCreate({ reason: 'worker blocked' }),
+      handlers: {
+        gateCreate: async () => ({
+          dryRun: true,
+          command: 'gate-create',
+          args: { reason: 'worker blocked', runId: 'run-fake' },
+        }),
+      },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.gateCreate({ reason: 'worker blocked' }),
+      handlers: {
+        gateCreate: async () => ({
+          dryRun: true,
+          command: 'gate-create',
+          args: { reason: 'worker blocked', gateId: 'gate-1' },
+        }),
+      },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.gateResolve({ resolution: 'continue' }),
+      handlers: {
+        gateResolve: async () => ({
+          dryRun: true,
+          command: 'gate-resolve',
+          args: { resolution: 'continue', gateId: 'gate-1' },
+        }),
+      },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.gateResolve({ resolution: 'yes' }),
+      handlers: {
+        gateResolve: async () => ({
+          dryRun: true,
+          command: 'gate-resolve',
+          args: { resolution: 'yes', exitCode: '0' },
+        }),
+      },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.gateCreate({ reason: 'worker blocked' }),
+      handlers: {
+        gateCreate: async () => ({ dryRun: true, command: 'gate-create', args: { reason: '   ' } }),
+      },
+      message: /reason and no id/,
+    },
+    {
+      call: (loop) => loop.gateCreate({ reason: 'worker blocked' }),
+      handlers: {
+        gateCreate: async () => ({
+          dryRun: true,
+          command: 'gate-create',
+          args: { reason: 'worker blocked', approved: 'yes' },
+        }),
+      },
+      message: /reason and no id/,
+    },
+    {
+      call: (loop) => loop.gateResolve({ resolution: 'continue' }),
+      handlers: {
+        gateResolve: async () => ({
+          dryRun: true,
+          command: 'gate-resolve',
+          args: { resolution: 'continue', action: 'merge' },
+        }),
+      },
+      message: /resolution and no id/,
+    },
+    {
+      call: (loop) => loop.gateCreate({ reason: 'worker blocked' }),
+      handlers: {
+        gateCreate: async () => ({ dryRun: true, command: 'gate-create', args: { reason: 'different' } }),
+      },
+      message: /gate-create plan must record the reason/,
+    },
+    {
+      call: (loop) => loop.gateResolve({ resolution: 'continue' }),
+      handlers: {
+        gateResolve: async () => ({ dryRun: true, command: 'gate-resolve', args: { resolution: 'yes' } }),
+      },
+      message: /gate-resolve plan must record the resolution/,
+    },
+    {
+      call: (loop) => loop.gateCreate({ reason: 'worker blocked' }),
+      handlers: {
+        gateCreate: async () =>
+          ({ dryRun: false, command: 'gate-create', args: { reason: 'worker blocked' } }) as unknown as PlannedOrcaCall,
+      },
+      message: /refusing to treat an Orca result as success/,
+    },
+    {
+      call: (loop) => loop.gateResolve({ resolution: 'continue' }),
+      handlers: {
+        gateResolve: async () => ({ dryRun: true, command: 'check', args: { converged: 'true' } }),
+      },
+      message: /refusing to treat an Orca result as success/,
+    },
+  ]
+  for (const item of cases) {
+    const loop = await waitingLoop(withGates(item.handlers))
+    const before = loop.snapshot().intents.length
+    await assert.rejects(() => item.call(loop), item.message)
+    assert.equal(loop.state, 'waiting')
+    assert.equal(loop.snapshot().intents.length, before)
+    assert.equal(loop.snapshot().humanDecision, null)
+    assert.equal(
+      loop.snapshot().intents.some((intent) => intent.command === 'gate-create' || intent.command === 'gate-resolve'),
+      false,
+    )
+    assert.equal(loop.snapshot().githubWritePerformed, false)
+    assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+    assert.equal(loop.state, 'waiting')
   }
 })
