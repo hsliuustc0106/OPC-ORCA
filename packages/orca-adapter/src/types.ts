@@ -1,7 +1,7 @@
 /**
  * Subcommands the adapter can spawn when live is on.
- * Flag spellings are the adapter's (`--goal`, `--run-id`, …) until Phase 8
- * checks them against the desktop CLI. They are not a guessed success.
+ * Flag spellings live in `src/cli.ts` (`orcaCliConfirmTodo`). Confirm them
+ * against the desktop CLI during the local run. They are not a guessed success.
  */
 export type OrcaCommand =
   | 'status'

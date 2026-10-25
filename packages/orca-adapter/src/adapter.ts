@@ -1,3 +1,4 @@
+import { orcaCliArgs, ORCA_CLI, type OrcaFlagName } from './cli.ts'
 import { OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
 import { parseLiveStdout } from './parse.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
@@ -39,12 +40,14 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
    * Spawn the resolved CLI. Also enabled when `env.OPC_ORCA_LIVE` is exactly
    * `1` (or `process.env` when `env` is omitted). `live: false` forces this
    * off. Ignored when `dryRun` is true. Default false.
-   * TODO(orca-cli): Phase 8 confirms the `--flag` spellings against the desktop CLI.
+   * This option is the adapter mechanism. A dig tool caller does not set it.
+   * `runDig` sets it only after the operator allows live.
+   * TODO(orca-cli): subcommand and flag spellings are `src/cli.ts`.
    */
   live?: boolean
 }
 
-type Flag = readonly [name: string, value: string]
+type Flag = readonly [OrcaFlagName, string]
 
 /**
  * Live spawn is opt-in. Process spawn is reached only through `./spawn.ts`,
@@ -121,8 +124,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
 
   async function runLive(command: OrcaCommand, flags: readonly Flag[]): Promise<LiveOrcaCall> {
     if (!executable) notConfigured(command)
-    const args: string[] = [command]
-    for (const [name, value] of flags) args.push(`--${name}`, value)
+    const args = orcaCliArgs(command, flags)
     const argv = [executable, ...args]
     let spawned
     try {
@@ -169,136 +171,147 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
     async status(_input: StatusInput = {}) {
       // A supplied runId is not copied. Dry-run must not look like a status payload.
       // Live does not copy it either: only stdout `run-id:` can add one.
-      return dispatch('status', [], () => plan(planned, 'status', {}))
+      const command = ORCA_CLI.commands.status
+      return dispatch(command, [], () => plan(planned, command, {}))
     },
     async runCreate(input: RunCreateInput) {
       const goal = required(input.goal, 'goal')
       const repo = required(input.repo, 'repo')
       const baseRef = input.baseRef === undefined ? undefined : required(input.baseRef, 'baseRef')
+      const command = ORCA_CLI.commands.runCreate
       const flags: Flag[] = [
-        ['goal', goal],
-        ['repo', repo],
+        [ORCA_CLI.flags.goal, goal],
+        [ORCA_CLI.flags.repo, repo],
       ]
-      if (baseRef !== undefined) flags.push(['base', baseRef])
-      return dispatch('run-create', flags, () => {
+      if (baseRef !== undefined) flags.push([ORCA_CLI.flags.base, baseRef])
+      return dispatch(command, flags, () => {
         const args: Record<string, string> = { goal, repo }
         if (baseRef !== undefined) args.base = baseRef
-        return plan(planned, 'run-create', args)
+        return plan(planned, command, args)
       })
     },
     async taskCreate(input: TaskCreateInput) {
+      const command = ORCA_CLI.commands.taskCreate
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
         const title = required(input.title, 'title')
         defaultWorker(input.worker, input.worktree)
-        if (!live) return refuse('task-create')
-        return runLive('task-create', [
-          ['run-id', runId],
-          ['title', title],
-          ['worker', input.worker ?? 'dsh'],
-          ['worktree', input.worktree ?? 'new-child'],
+        if (!live) return refuse(command)
+        return runLive(command, [
+          [ORCA_CLI.flags.runId, runId],
+          [ORCA_CLI.flags.title, title],
+          [ORCA_CLI.flags.worker, input.worker ?? 'dsh'],
+          [ORCA_CLI.flags.worktree, input.worktree ?? 'new-child'],
         ])
       }
       const title = required(input.title, 'title')
       // runId is not copied. Dry-run must not look like a created run.
-      return plan(planned, 'task-create', {
+      return plan(planned, command, {
         title,
         ...dispatchArgs(input.worker, input.worktree),
       })
     },
     async taskList(input: TaskListInput = {}) {
+      const command = ORCA_CLI.commands.taskList
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
-        if (!live) return refuse('task-list')
-        return runLive('task-list', [['run-id', runId]])
+        if (!live) return refuse(command)
+        return runLive(command, [[ORCA_CLI.flags.runId, runId]])
       }
       // runId is not copied. Dry-run must not look like a listed run.
-      return plan(planned, 'task-list', {})
+      return plan(planned, command, {})
     },
     async workerStart(input: WorkerStartInput) {
+      const command = ORCA_CLI.commands.workerStart
       if (!dryRun) {
         const taskId = required(input.taskId, 'taskId')
         defaultWorker(input.worker, input.worktree)
-        if (!live) return refuse('worker-start')
-        return runLive('worker-start', [
-          ['task-id', taskId],
-          ['worker', input.worker ?? 'dsh'],
-          ['worktree', input.worktree ?? 'new-child'],
+        if (!live) return refuse(command)
+        return runLive(command, [
+          [ORCA_CLI.flags.taskId, taskId],
+          [ORCA_CLI.flags.worker, input.worker ?? 'dsh'],
+          [ORCA_CLI.flags.worktree, input.worktree ?? 'new-child'],
         ])
       }
       // taskId is not copied. Dry-run must not look like a started worker.
-      return plan(planned, 'worker-start', dispatchArgs(input.worker, input.worktree))
+      return plan(planned, command, dispatchArgs(input.worker, input.worktree))
     },
     async workerShow(input: WorkerShowInput = {}) {
+      const command = ORCA_CLI.commands.workerShow
       if (!dryRun) {
         const workerId = required(input.workerId, 'workerId')
-        if (!live) return refuse('worker-show')
-        return runLive('worker-show', [['worker-id', workerId]])
+        if (!live) return refuse(command)
+        return runLive(command, [[ORCA_CLI.flags.workerId, workerId]])
       }
       // workerId is not copied. Dry-run must not look like a shown worker.
-      return plan(planned, 'worker-show', {})
+      return plan(planned, command, {})
     },
     async workerRelease(input: WorkerReleaseInput = {}) {
+      const command = ORCA_CLI.commands.workerRelease
       if (!dryRun) {
         const workerId = required(input.workerId, 'workerId')
-        if (!live) return refuse('worker-release')
-        return runLive('worker-release', [['worker-id', workerId]])
+        if (!live) return refuse(command)
+        return runLive(command, [[ORCA_CLI.flags.workerId, workerId]])
       }
       // workerId is not copied. Dry-run must not look like a released worker.
-      return plan(planned, 'worker-release', {})
+      return plan(planned, command, {})
     },
     async check(input: CheckInput) {
+      const command = ORCA_CLI.commands.check
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
-        if (!live) return refuse('check')
+        if (!live) return refuse(command)
         // The caller's converged flag is not passed and not copied.
-        return runLive('check', [['run-id', runId]])
+        return runLive(command, [[ORCA_CLI.flags.runId, runId]])
       }
       if (typeof input.converged !== 'boolean') throw new TypeError('converged is required')
       // runId is not copied. Dry-run must not look like a checked run.
-      return plan(planned, 'check', { converged: input.converged ? 'true' : 'false' })
+      return plan(planned, command, { converged: input.converged ? 'true' : 'false' })
     },
     async reply(input: ReplyInput) {
+      const command = ORCA_CLI.commands.reply
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
         const text = required(input.text, 'text')
-        if (!live) return refuse('reply')
-        return runLive('reply', [
-          ['run-id', runId],
-          ['text', text],
+        if (!live) return refuse(command)
+        return runLive(command, [
+          [ORCA_CLI.flags.runId, runId],
+          [ORCA_CLI.flags.text, text],
         ])
       }
       const text = required(input.text, 'text')
       // runId is not copied. Dry-run must not look like a sent message.
-      return plan(planned, 'reply', { text })
+      return plan(planned, command, { text })
     },
     async gateCreate(input: GateCreateInput) {
+      const command = ORCA_CLI.commands.gateCreate
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
         const reason = required(input.reason, 'reason')
-        if (!live) return refuse('gate-create')
-        return runLive('gate-create', [
-          ['run-id', runId],
-          ['reason', reason],
+        if (!live) return refuse(command)
+        return runLive(command, [
+          [ORCA_CLI.flags.runId, runId],
+          [ORCA_CLI.flags.reason, reason],
         ])
       }
       const reason = required(input.reason, 'reason')
       // runId is not copied. Dry-run must not look like a created gate.
-      return plan(planned, 'gate-create', { reason })
+      return plan(planned, command, { reason })
     },
     async gateResolve(input: GateResolveInput) {
+      const command = ORCA_CLI.commands.gateResolve
       if (!dryRun) {
         const gateId = required(input.gateId, 'gateId')
         const resolution = required(input.resolution, 'resolution')
-        if (!live) return refuse('gate-resolve')
-        return runLive('gate-resolve', [
-          ['gate-id', gateId],
-          ['resolution', resolution],
+        if (!live) return refuse(command)
+        return runLive(command, [
+          [ORCA_CLI.flags.gateId, gateId],
+          [ORCA_CLI.flags.resolution, resolution],
         ])
       }
       const resolution = required(input.resolution, 'resolution')
       // gateId is not copied. Dry-run must not look like a resolved gate.
-      return plan(planned, 'gate-resolve', { resolution })
+      return plan(planned, command, { resolution })
     },
   }
 }

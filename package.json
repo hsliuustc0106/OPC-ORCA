@@ -13,7 +13,8 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run typecheck && node --experimental-strip-types --test packages/orca-adapter/test/*.test.ts packages/coordinator/test/*.test.ts plugins/opc-orca/test/*.test.js test/*.test.js"
+    "test": "npm run typecheck && node --experimental-strip-types --test packages/orca-adapter/test/*.test.ts packages/coordinator/test/*.test.ts plugins/opc-orca/test/*.test.js test/*.test.js",
+    "smoke:local": "sh scripts/smoke-local.sh"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",

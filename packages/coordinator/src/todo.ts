@@ -12,9 +12,13 @@
  * is not the human PR yes and does not move awaiting_human_pr. gate-create
  * and gate-resolve are Orca backend gates for a worker or task decision.
  * They stay on waiting and do not move awaiting_human_pr. Live spawn is
- * wired behind OPC_ORCA_LIVE=1 or the adapter live option and fails closed.
- * The loop stores a parsed live result and advances on that parse. A throw
- * does not advance state. The loop still stops at awaiting_human_pr.
+ * wired behind the operator switch and fails closed. A dig caller `live:
+ * true` does not grant it: `config.live` false, or `OPC_ORCA_LIVE` unset,
+ * keeps that dig on dry-run. The adapter `live` option is the mechanism
+ * `runDig` sets only after that check. The loop stores a parsed live result
+ * and advances on that parse. A throw does not advance state. CLI
+ * subcommands and flag names are listed in `packages/orca-adapter/src/cli.ts`
+ * for the local run to confirm. The loop still stops at awaiting_human_pr.
  */
 export const WIRE_ADAPTER_TODO =
   'TODO(wire-adapter): normal-task run-create, task-create, and worker-start ' +
@@ -44,6 +48,8 @@ export const WIRE_ADAPTER_TODO =
   'and that throw does not advance the coordinator. ' +
   'A parsed live result (run id, task id, worker id, status, converged) is stored and advances state. ' +
   'Dry-run plans stay free of those ids. ' +
+  'A dig tool caller live: true does not grant spawn. config.live false, or OPC_ORCA_LIVE unset, keeps that dig on dry-run. ' +
+  'CLI subcommands and flag names are listed in packages/orca-adapter/src/cli.ts for the local run to confirm. ' +
   'The loop still stops at awaiting_human_pr: do not open, update, or merge a pull request here. ' +
   'Easy tasks stay on the coordinator-direct path and skip worker dispatch. ' +
   'Orca gate-resolve is not a substitute for the human PR yes.'

@@ -53,7 +53,7 @@ The coordinator stub enforces one verdict per SHA and a non-empty `Written-by`. 
 ## Hard rules
 
 1. **Harness is the entrance.** Product code talks to DeepSeek Harness through the plugin API. Do not patch a Harness install.
-2. **Orca is the backend.** Run, Task, and Dispatch go through `packages/orca-adapter`. The binary is `orca` on `PATH`. On Linux, if `orca` is absent, the resolver falls back to `orca-ide`. Other platforms do not look for `orca-ide`. A dry-run records the planned `run-create`, `task-create`, `worker-start`, `check`, `status`, `task-list`, `worker-show`, `reply`, `worker-release`, `gate-create`, and `gate-resolve` and does not need the binary. Dry-run never spawns, including when `OPC_ORCA_LIVE=1`. Observation plans are not convergence. `reply` is a worker-side answer and is not the human PR yes. `gate-create` and `gate-resolve` are Orca backend gates for a worker or task decision. They are not the human PR yes and do not move `awaiting_human_pr`. Live spawn is off unless `OPC_ORCA_LIVE` is exactly `1` or the adapter is created with `live: true`. `live: false` forces it off. The only `node:child_process` import is `packages/orca-adapter/src/spawn.ts`, and `spawn` is called with `shell: false`. With the flag off, a call throws `not-configured` (no binary) or `not-implemented` (binary present, nothing spawned). With the flag on, a missing binary, a non-zero exit, or unparseable stdout throws (`not-configured`, `spawn-failed`, or `unparseable`) and must not be treated as success. Wrappers never return a made-up run id, task id, worker id, message id, gate id, status payload, or exit 0. Ids are copied only from parsed stdout.
+2. **Orca is the backend.** Run, Task, and Dispatch go through `packages/orca-adapter`. The binary is `orca` on `PATH`. On Linux, if `orca` is absent, the resolver falls back to `orca-ide`. Other platforms do not look for `orca-ide`. A dry-run records the planned `run-create`, `task-create`, `worker-start`, `check`, `status`, `task-list`, `worker-show`, `reply`, `worker-release`, `gate-create`, and `gate-resolve` and does not need the binary. Dry-run never spawns, including when `OPC_ORCA_LIVE=1`. Observation plans are not convergence. `reply` is a worker-side answer and is not the human PR yes. `gate-create` and `gate-resolve` are Orca backend gates for a worker or task decision. They are not the human PR yes and do not move `awaiting_human_pr`. The adapter spawns only when `OPC_ORCA_LIVE` is exactly `1` or it is created with `live: true`. `live: false` forces it off. A dig tool caller passing `live: true` is not that grant: plugin `config.live: false`, or an unset `OPC_ORCA_LIVE`, keeps the dig on dry-run. `runDig` sets the adapter `live` option only after that operator check. The only `node:child_process` import is `packages/orca-adapter/src/spawn.ts`, and `spawn` is called with `shell: false`. With the flag off, a call throws `not-configured` (no binary) or `not-implemented` (binary present, nothing spawned). With the flag on, a missing binary, a non-zero exit, or unparseable stdout throws (`not-configured`, `spawn-failed`, or `unparseable`) and must not be treated as success. Wrappers never return a made-up run id, task id, worker id, message id, gate id, status payload, or exit 0. Ids are copied only from parsed stdout.
 3. **No public GitHub write without a human yes** for that action (open, update, or merge). A chat message, a green check, or a `Verdict: PASS` is not that yes.
 4. **No merge queue and no auto-merge.** Do not add `merge_group` triggers, required merge checks, or `gh pr merge`.
 5. **No secrets** in the repo, the logs, or the prompt. Do not print tokens.
@@ -65,16 +65,17 @@ The coordinator stub enforces one verdict per SHA and a non-empty `Written-by`. 
 ```sh
 npm ci
 npm test
+npm run smoke:local
 ```
 
-`npm test` runs `tsc --noEmit` and the node tests. There is no separate linter in v0.
+`npm test` runs `tsc --noEmit` and the node tests. There is no separate linter in v0. `npm run smoke:local` is the dry-run dig on this machine. It does not need the `orca` binary. Live is `OPC_ORCA_LIVE=1 npm run smoke:local -- --live` and is not part of CI. See [docs/local-test.md](docs/local-test.md).
 
 ## Layout
 
-- `plugins/opc-orca/` — DSH plugin (`@opc-orca/plugin`). Registers a `dig` tool. Default dry-run. Live only when `OPC_ORCA_LIVE=1` or `live: true`. Does not open, update, or merge.
+- `plugins/opc-orca/` — DSH plugin (`@opc-orca/plugin`). Registers a `dig` tool. Default dry-run. Live only when the operator set `OPC_ORCA_LIVE=1` and config `live` is not false. A caller `live: true` does not grant spawn. Does not open, update, or merge.
 - `packages/coordinator/` — dig-loop state machine. Dry-run plans stay as recorded. A parsed live result advances the same states. Stops in `awaiting_human_pr`.
-- `packages/orca-adapter/` — typed Orca CLI surface. Dry-run records a plan and does not spawn. Live spawn of `orca` / `orca-ide` is flag-gated (`OPC_ORCA_LIVE=1` or `live: true`) and fail-closed. Otherwise throws `not-configured` or refuses to spawn.
-- `docs/` — architecture, the human gate, the coordinator steps.
+- `packages/orca-adapter/` — typed Orca CLI surface. Dry-run records a plan and does not spawn. Live spawn of `orca` / `orca-ide` is flag-gated and fail-closed. Subcommands and flag names live in `src/cli.ts`. Otherwise throws `not-configured` or refuses to spawn.
+- `docs/` — architecture, the human gate, the coordinator steps, the local runbook.
 - `.github/workflows/test.yml` — the check that should stay green.
 - `.github/workflows/risk-tier.yml`, `review-gate.yml` — Phase 0 echoes. `continue-on-error`. Not required.
 - `.github/agent/` — placeholder tier and review policy. Not enforced.
