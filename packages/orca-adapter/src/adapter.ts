@@ -1,10 +1,15 @@
-import { OrcaNotConfiguredError, OrcaStubError } from './errors.ts'
+import { OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
+import { parseLiveStdout } from './parse.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
+import { spawnOrca } from './spawn.ts'
 import type {
   CheckInput,
+  DryRunOrcaAdapter,
   GateCreateInput,
   GateResolveInput,
+  LiveOrcaCall,
   OrcaAdapter,
+  OrcaCallResult,
   OrcaCommand,
   OrcaWorker,
   OrcaWorktree,
@@ -26,37 +31,36 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
    * observation commands status, task-list, and worker-show, plus
    * worker-release, reply, gate-create, and gate-resolve.
    * Does not spawn and does not require the `orca` binary.
+   * Wins over `live` and over `OPC_ORCA_LIVE`: a dry-run adapter never spawns.
    * Default false: those calls reject and never resolve an id, a message id, a gate id, or a status payload.
    */
   dryRun?: boolean
+  /**
+   * Spawn the resolved CLI. Also enabled when `env.OPC_ORCA_LIVE` is exactly
+   * `1` (or `process.env` when `env` is omitted). `live: false` forces this
+   * off. Ignored when `dryRun` is true. Default false.
+   * TODO(orca-cli): Phase 8 confirms the `--flag` spellings against the desktop CLI.
+   */
+  live?: boolean
 }
+
+type Flag = readonly [name: string, value: string]
 
 /**
- * TODO(orca-cli): when a live command is wired, spawn the resolved binary
- * (`orca`, or `orca-ide` on Linux) as `[bin, command, …]` and parse its
- * stdout. Do not add a process spawn until that parser exists, and never
- * synthesize a run id, task id, worker id, message id, gate id, exit code 0, or status payload.
- * `dryRun` returns before that refusal and only for run-create, task-create,
- * worker-start, check, status, task-list, worker-show, worker-release, reply,
- * gate-create, and gate-resolve. Gate plans are backend decisions. They are
- * not a human PR yes.
+ * Live spawn is opt-in. Process spawn is reached only through `./spawn.ts`,
+ * and only after `dryRun` is false and `live` is true.
+ * Never synthesize an id when stdout does not contain one.
  */
-async function refuse(bin: string | null, platform: string, command: OrcaCommand): Promise<never> {
-  if (!bin) {
-    const looked = platform === 'linux' ? '`orca` and `orca-ide`' : '`orca`'
-    throw new OrcaNotConfiguredError(
-      `orca CLI not found (looked for ${looked} on PATH). ${command} is not configured.`,
-    )
-  }
-  const argv = [bin, command]
-  throw new OrcaStubError(
-    `refusing to spawn ${bin} ${command}: v0 stub, no success is returned`,
-    argv,
-  )
+function liveRequested(options: CreateOrcaAdapterOptions): boolean {
+  if (options.live === true) return true
+  if (options.live === false) return false
+  const env = options.env ?? process.env
+  return env.OPC_ORCA_LIVE === '1'
 }
 
-function required(value: string | undefined, label: string): void {
+function required(value: string | undefined, label: string): string {
   if (value === undefined || value.trim().length === 0) throw new TypeError(`${label} is required`)
+  return value
 }
 
 function defaultWorker(worker: OrcaWorker | undefined, worktree: OrcaWorktree | undefined): void {
@@ -86,83 +90,169 @@ function dispatchArgs(worker: OrcaWorker | undefined, worktree: OrcaWorktree | u
   }
 }
 
+export function createOrcaAdapter(options: CreateOrcaAdapterOptions & { dryRun: true }): DryRunOrcaAdapter
+export function createOrcaAdapter(options?: CreateOrcaAdapterOptions): OrcaAdapter
 export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaAdapter {
   const dryRun = options.dryRun === true
+  if (dryRun && options.live === true) {
+    throw new TypeError('dryRun and live cannot both be set')
+  }
+  const live = dryRun ? false : liveRequested(options)
   const platform = options.platform ?? process.platform
   const executable = resolveOrcaExecutable({ env: options.env, platform })
   const planned: PlannedOrcaCall[] = []
 
+  const looked = platform === 'linux' ? '`orca` and `orca-ide`' : '`orca`'
+
+  function notConfigured(command: OrcaCommand): never {
+    throw new OrcaNotConfiguredError(
+      `orca CLI not found (looked for ${looked} on PATH). ${command} is not configured.`,
+    )
+  }
+
+  function refuse(command: OrcaCommand): never {
+    if (!executable) notConfigured(command)
+    const argv = [executable, command]
+    throw new OrcaStubError(
+      `refusing to spawn ${executable} ${command}: live spawn is off, no success is returned`,
+      argv,
+    )
+  }
+
+  async function runLive(command: OrcaCommand, flags: readonly Flag[]): Promise<LiveOrcaCall> {
+    if (!executable) notConfigured(command)
+    const args: string[] = [command]
+    for (const [name, value] of flags) args.push(`--${name}`, value)
+    const argv = [executable, ...args]
+    let spawned
+    try {
+      spawned = await spawnOrca(executable, args)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'EACCES') notConfigured(command)
+      throw new OrcaSpawnError(`${command} could not be spawned`, argv, null)
+    }
+    // Stderr is not parsed and is not copied into the error: a CLI secret must not land here.
+    if (spawned.exitCode !== 0) {
+      throw new OrcaSpawnError(`${command} exited ${spawned.exitCode ?? 'null'}`, argv, spawned.exitCode)
+    }
+    let parsed
+    try {
+      parsed = parseLiveStdout(command, spawned.stdout, argv)
+    } catch (error) {
+      if (error instanceof OrcaParseError) throw error
+      throw new OrcaParseError(`${command} stdout is unparseable`, argv)
+    }
+    return {
+      dryRun: false,
+      live: true,
+      command,
+      exitCode: 0,
+      ids: parsed.ids,
+      fields: parsed.fields,
+    }
+  }
+
+  function dispatch(command: OrcaCommand, flags: readonly Flag[], recorded: () => PlannedOrcaCall): Promise<OrcaCallResult> {
+    if (dryRun) return Promise.resolve(recorded())
+    if (!live) refuse(command)
+    return runLive(command, flags)
+  }
+
   return {
     executable,
     dryRun,
+    live,
     get planned() {
       return planned.map((call) => ({ dryRun: true as const, command: call.command, args: { ...call.args } }))
     },
     async status(_input: StatusInput = {}) {
-      if (!dryRun) return refuse(executable, platform, 'status')
       // A supplied runId is not copied. Dry-run must not look like a status payload.
-      return plan(planned, 'status', {})
+      // Live does not copy it either: only stdout `run-id:` can add one.
+      return dispatch('status', [], () => plan(planned, 'status', {}))
     },
     async runCreate(input: RunCreateInput) {
-      required(input.goal, 'goal')
-      required(input.repo, 'repo')
-      if (input.baseRef !== undefined) required(input.baseRef, 'baseRef')
-      if (!dryRun) return refuse(executable, platform, 'run-create')
-      const args: Record<string, string> = { goal: input.goal, repo: input.repo }
-      if (input.baseRef !== undefined) args.base = input.baseRef
-      return plan(planned, 'run-create', args)
+      const goal = required(input.goal, 'goal')
+      const repo = required(input.repo, 'repo')
+      const baseRef = input.baseRef === undefined ? undefined : required(input.baseRef, 'baseRef')
+      const flags: Flag[] = [
+        ['goal', goal],
+        ['repo', repo],
+      ]
+      if (baseRef !== undefined) flags.push(['base', baseRef])
+      return dispatch('run-create', flags, () => {
+        const args: Record<string, string> = { goal, repo }
+        if (baseRef !== undefined) args.base = baseRef
+        return plan(planned, 'run-create', args)
+      })
     },
     async taskCreate(input: TaskCreateInput) {
       if (!dryRun) {
-        required(input.runId, 'runId')
-        required(input.title, 'title')
+        const runId = required(input.runId, 'runId')
+        const title = required(input.title, 'title')
         defaultWorker(input.worker, input.worktree)
-        return refuse(executable, platform, 'task-create')
+        if (!live) return refuse('task-create')
+        return runLive('task-create', [
+          ['run-id', runId],
+          ['title', title],
+          ['worker', input.worker ?? 'dsh'],
+          ['worktree', input.worktree ?? 'new-child'],
+        ])
       }
-      required(input.title, 'title')
+      const title = required(input.title, 'title')
       // runId is not copied. Dry-run must not look like a created run.
       return plan(planned, 'task-create', {
-        title: input.title,
+        title,
         ...dispatchArgs(input.worker, input.worktree),
       })
     },
     async taskList(input: TaskListInput = {}) {
       if (!dryRun) {
-        required(input.runId, 'runId')
-        return refuse(executable, platform, 'task-list')
+        const runId = required(input.runId, 'runId')
+        if (!live) return refuse('task-list')
+        return runLive('task-list', [['run-id', runId]])
       }
       // runId is not copied. Dry-run must not look like a listed run.
       return plan(planned, 'task-list', {})
     },
     async workerStart(input: WorkerStartInput) {
       if (!dryRun) {
-        required(input.taskId, 'taskId')
+        const taskId = required(input.taskId, 'taskId')
         defaultWorker(input.worker, input.worktree)
-        return refuse(executable, platform, 'worker-start')
+        if (!live) return refuse('worker-start')
+        return runLive('worker-start', [
+          ['task-id', taskId],
+          ['worker', input.worker ?? 'dsh'],
+          ['worktree', input.worktree ?? 'new-child'],
+        ])
       }
       // taskId is not copied. Dry-run must not look like a started worker.
       return plan(planned, 'worker-start', dispatchArgs(input.worker, input.worktree))
     },
     async workerShow(input: WorkerShowInput = {}) {
       if (!dryRun) {
-        required(input.workerId, 'workerId')
-        return refuse(executable, platform, 'worker-show')
+        const workerId = required(input.workerId, 'workerId')
+        if (!live) return refuse('worker-show')
+        return runLive('worker-show', [['worker-id', workerId]])
       }
       // workerId is not copied. Dry-run must not look like a shown worker.
       return plan(planned, 'worker-show', {})
     },
     async workerRelease(input: WorkerReleaseInput = {}) {
       if (!dryRun) {
-        required(input.workerId, 'workerId')
-        return refuse(executable, platform, 'worker-release')
+        const workerId = required(input.workerId, 'workerId')
+        if (!live) return refuse('worker-release')
+        return runLive('worker-release', [['worker-id', workerId]])
       }
       // workerId is not copied. Dry-run must not look like a released worker.
       return plan(planned, 'worker-release', {})
     },
     async check(input: CheckInput) {
       if (!dryRun) {
-        required(input.runId, 'runId')
-        return refuse(executable, platform, 'check')
+        const runId = required(input.runId, 'runId')
+        if (!live) return refuse('check')
+        // The caller's converged flag is not passed and not copied.
+        return runLive('check', [['run-id', runId]])
       }
       if (typeof input.converged !== 'boolean') throw new TypeError('converged is required')
       // runId is not copied. Dry-run must not look like a checked run.
@@ -170,33 +260,45 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
     },
     async reply(input: ReplyInput) {
       if (!dryRun) {
-        required(input.runId, 'runId')
-        required(input.text, 'text')
-        return refuse(executable, platform, 'reply')
+        const runId = required(input.runId, 'runId')
+        const text = required(input.text, 'text')
+        if (!live) return refuse('reply')
+        return runLive('reply', [
+          ['run-id', runId],
+          ['text', text],
+        ])
       }
-      required(input.text, 'text')
+      const text = required(input.text, 'text')
       // runId is not copied. Dry-run must not look like a sent message.
-      return plan(planned, 'reply', { text: input.text })
+      return plan(planned, 'reply', { text })
     },
     async gateCreate(input: GateCreateInput) {
       if (!dryRun) {
-        required(input.runId, 'runId')
-        required(input.reason, 'reason')
-        return refuse(executable, platform, 'gate-create')
+        const runId = required(input.runId, 'runId')
+        const reason = required(input.reason, 'reason')
+        if (!live) return refuse('gate-create')
+        return runLive('gate-create', [
+          ['run-id', runId],
+          ['reason', reason],
+        ])
       }
-      required(input.reason, 'reason')
+      const reason = required(input.reason, 'reason')
       // runId is not copied. Dry-run must not look like a created gate.
-      return plan(planned, 'gate-create', { reason: input.reason })
+      return plan(planned, 'gate-create', { reason })
     },
     async gateResolve(input: GateResolveInput) {
       if (!dryRun) {
-        required(input.gateId, 'gateId')
-        required(input.resolution, 'resolution')
-        return refuse(executable, platform, 'gate-resolve')
+        const gateId = required(input.gateId, 'gateId')
+        const resolution = required(input.resolution, 'resolution')
+        if (!live) return refuse('gate-resolve')
+        return runLive('gate-resolve', [
+          ['gate-id', gateId],
+          ['resolution', resolution],
+        ])
       }
-      required(input.resolution, 'resolution')
+      const resolution = required(input.resolution, 'resolution')
       // gateId is not copied. Dry-run must not look like a resolved gate.
-      return plan(planned, 'gate-resolve', { resolution: input.resolution })
+      return plan(planned, 'gate-resolve', { resolution })
     },
   }
 }

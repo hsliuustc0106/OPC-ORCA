@@ -345,8 +345,15 @@ test('live path does not resolve a run id', async () => {
   assert.deepEqual(present.planned, [])
 })
 
-test('v0 adapter does not import child_process', () => {
-  const source = readFileSync(fileURLToPath(new URL('../src/adapter.ts', import.meta.url)), 'utf8')
-  assert.doesNotMatch(source, /from ['"]node:child_process['"]|require\(['"]node:child_process['"]\)/)
-  assert.match(source, /TODO\(orca-cli\)/)
+test('child_process is imported only by the live spawn module', () => {
+  const offenders: string[] = []
+  for (const name of ['adapter.ts', 'errors.ts', 'index.ts', 'parse.ts', 'resolve.ts', 'types.ts', 'spawn.ts']) {
+    const text = readFileSync(fileURLToPath(new URL(`../src/${name}`, import.meta.url)), 'utf8')
+    if (/node:child_process|['"]child_process['"]/.test(text)) offenders.push(name)
+  }
+  assert.deepEqual(offenders, ['spawn.ts'])
+  const spawnSource = readFileSync(fileURLToPath(new URL('../src/spawn.ts', import.meta.url)), 'utf8')
+  assert.match(spawnSource, /shell:\s*false/)
+  const adapterSource = readFileSync(fileURLToPath(new URL('../src/adapter.ts', import.meta.url)), 'utf8')
+  assert.match(adapterSource, /TODO\(orca-cli\)/)
 })
