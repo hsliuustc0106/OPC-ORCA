@@ -1,6 +1,7 @@
 import { OrcaNotConfiguredError, OrcaStubError } from './errors.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
 import type {
+  CheckInput,
   OrcaAdapter,
   OrcaCommand,
   OrcaWorker,
@@ -14,7 +15,7 @@ import type {
 
 export interface CreateOrcaAdapterOptions extends ResolveOptions {
   /**
-   * Record planned run-create, task-create, and worker-start.
+   * Record planned run-create, task-create, worker-start, and check.
    * Does not spawn and does not require the `orca` binary.
    * Default false: those calls reject and never resolve an id.
    */
@@ -26,7 +27,8 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
  * (`orca`, or `orca-ide` on Linux) as `[bin, command, …]` and parse its
  * stdout. Do not add a process spawn until that parser exists, and never
  * synthesize a run id, task id, gate id, or exit code 0.
- * `dryRun` returns before that refusal and only for the three dispatch commands.
+ * `dryRun` returns before that refusal and only for run-create, task-create,
+ * worker-start, and check.
  */
 async function refuse(bin: string | null, platform: string, command: OrcaCommand): Promise<never> {
   if (!bin) {
@@ -132,9 +134,14 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       required(input.workerId, 'workerId')
       return refuse(executable, platform, 'worker-release')
     },
-    async check(input) {
-      required(input.runId, 'runId')
-      return refuse(executable, platform, 'check')
+    async check(input: CheckInput) {
+      if (!dryRun) {
+        required(input.runId, 'runId')
+        return refuse(executable, platform, 'check')
+      }
+      if (typeof input.converged !== 'boolean') throw new TypeError('converged is required')
+      // runId is not copied. Dry-run must not look like a checked run.
+      return plan(planned, 'check', { converged: input.converged ? 'true' : 'false' })
     },
     async reply(input) {
       required(input.runId, 'runId')
