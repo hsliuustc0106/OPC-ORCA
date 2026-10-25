@@ -8,20 +8,23 @@ import type {
   OrcaWorktree,
   PlannedOrcaCall,
   PlannedOrcaCommand,
+  ReplyInput,
   RunCreateInput,
   StatusInput,
   TaskCreateInput,
   TaskListInput,
+  WorkerReleaseInput,
   WorkerShowInput,
   WorkerStartInput,
 } from './types.ts'
 
 export interface CreateOrcaAdapterOptions extends ResolveOptions {
   /**
-   * Record planned run-create, task-create, worker-start, check, and the
-   * observation commands status, task-list, and worker-show.
+   * Record planned run-create, task-create, worker-start, check, the
+   * observation commands status, task-list, and worker-show, plus
+   * worker-release and reply.
    * Does not spawn and does not require the `orca` binary.
-   * Default false: those calls reject and never resolve an id or a status payload.
+   * Default false: those calls reject and never resolve an id, a message id, or a status payload.
    */
   dryRun?: boolean
 }
@@ -30,9 +33,9 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
  * TODO(orca-cli): when a live command is wired, spawn the resolved binary
  * (`orca`, or `orca-ide` on Linux) as `[bin, command, …]` and parse its
  * stdout. Do not add a process spawn until that parser exists, and never
- * synthesize a run id, task id, worker id, gate id, exit code 0, or status payload.
+ * synthesize a run id, task id, worker id, message id, gate id, exit code 0, or status payload.
  * `dryRun` returns before that refusal and only for run-create, task-create,
- * worker-start, check, status, task-list, and worker-show.
+ * worker-start, check, status, task-list, worker-show, worker-release, and reply.
  */
 async function refuse(bin: string | null, platform: string, command: OrcaCommand): Promise<never> {
   if (!bin) {
@@ -144,9 +147,13 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       // workerId is not copied. Dry-run must not look like a shown worker.
       return plan(planned, 'worker-show', {})
     },
-    async workerRelease(input) {
-      required(input.workerId, 'workerId')
-      return refuse(executable, platform, 'worker-release')
+    async workerRelease(input: WorkerReleaseInput = {}) {
+      if (!dryRun) {
+        required(input.workerId, 'workerId')
+        return refuse(executable, platform, 'worker-release')
+      }
+      // workerId is not copied. Dry-run must not look like a released worker.
+      return plan(planned, 'worker-release', {})
     },
     async check(input: CheckInput) {
       if (!dryRun) {
@@ -157,10 +164,15 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       // runId is not copied. Dry-run must not look like a checked run.
       return plan(planned, 'check', { converged: input.converged ? 'true' : 'false' })
     },
-    async reply(input) {
-      required(input.runId, 'runId')
+    async reply(input: ReplyInput) {
+      if (!dryRun) {
+        required(input.runId, 'runId')
+        required(input.text, 'text')
+        return refuse(executable, platform, 'reply')
+      }
       required(input.text, 'text')
-      return refuse(executable, platform, 'reply')
+      // runId is not copied. Dry-run must not look like a sent message.
+      return plan(planned, 'reply', { text: input.text })
     },
     async gateCreate(input) {
       required(input.runId, 'runId')

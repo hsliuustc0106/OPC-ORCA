@@ -11,10 +11,12 @@ export type {
   OrcaWorktree,
   PlannedOrcaCall,
   PlannedOrcaCommand,
+  ReplyInput,
   RunCreateInput,
   StatusInput,
   TaskCreateInput,
   TaskListInput,
+  WorkerReleaseInput,
   WorkerShowInput,
   WorkerStartInput,
 } from './types.ts'

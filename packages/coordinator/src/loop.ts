@@ -55,6 +55,22 @@ export interface DigLoop {
    * Same failure rules as `status`. Not a substitute for `check`.
    */
   workerShow(): Promise<void>
+  /**
+   * Answer a worker ask while `waiting`. Calls the adapter's `reply` in
+   * dry-run and records the answer text. Does not change state. Not a check,
+   * not convergence, and not the human PR yes: it must not enter
+   * `awaiting_human_pr`. A rejection leaves the state on `waiting` and
+   * stores no reply intent. Does not invent a run id or a message id.
+   */
+  reply(input: { text: string }): Promise<void>
+  /**
+   * After `converging` on the Orca worker path (the worker is done with its
+   * tip). Calls the adapter's `worker-release` in dry-run and records that
+   * plan. Does not change state and does not open a pull request. A
+   * rejection leaves the state on `converging` and stores no release intent.
+   * Does not invent a worker id. The coordinator-direct path has no worker.
+   */
+  workerRelease(): Promise<void>
   /** Stop for a human. Requires one verdict for `sha`. Does not open a pull request. */
   askHumanPr(input: { sha: string; verdict: Verdict }): void
   /**
@@ -85,18 +101,21 @@ function normalizeVerdict(verdict: Verdict, previous: Verdict | null): Verdict {
 
 export interface DigLoopOptions {
   /**
-   * Adapter for normal-task dispatch, the waiting-loop check, and observation
-   * (`status`, `task-list`, `worker-show`). Default: dry-run, no binary
-   * required. A live adapter is called the same way and must reject; the loop
-   * does not invent a run id from that rejection. A rejected check is not
-   * converged. A rejected observation is not a successful read.
+   * Adapter for normal-task dispatch, the waiting-loop check, observation
+   * (`status`, `task-list`, `worker-show`), `reply` while waiting, and
+   * `worker-release` after converging. Default: dry-run, no binary required.
+   * A live adapter is called the same way and must reject; the loop does not
+   * invent a run id from that rejection. A rejected check is not converged.
+   * A rejected observation is not a successful read. A rejected reply is not
+   * an answer and is not the human PR yes. A rejected worker-release is not
+   * a released worker.
    */
   adapter?: OrcaAdapter
   /** Repository passed to run-create. Required before `bindRun`. */
   repo?: string
 }
 
-const FABRICATED_ID = /^(runId|taskId|workerId|exitCode)$/
+const FABRICATED_ID = /^(runId|taskId|workerId|messageId|exitCode)$/
 
 function toIntent(call: PlannedOrcaCall): Intent {
   return { command: call.command, args: { ...call.args } }
@@ -125,6 +144,19 @@ function requireDryPlan(call: PlannedOrcaCall, command: PlannedOrcaCall['command
   if (command === 'status' || command === 'task-list' || command === 'worker-show') {
     if (Object.keys(call.args).length !== 0) {
       throw new TypeError('dry-run observation must not record an id or a status payload')
+    }
+    return
+  }
+  if (command === 'worker-release') {
+    if (Object.keys(call.args).length !== 0) {
+      throw new TypeError('dry-run worker-release must not record a worker id or a payload')
+    }
+    return
+  }
+  if (command === 'reply') {
+    const text = call.args.text
+    if (Object.keys(call.args).length !== 1 || text === undefined || text.trim().length === 0) {
+      throw new TypeError('dry-run reply must record the answer text and no id')
     }
     return
   }
@@ -299,6 +331,50 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
     },
     workerShow() {
       return observe('worker-show', 'show a worker', () => adapter.workerShow())
+    },
+    reply(input) {
+      need(['waiting'], 'reply to a worker')
+      if (typeof input?.text !== 'string' || input.text.trim().length === 0) {
+        throw new TypeError('reply text is required')
+      }
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'reply to a worker while another adapter call is in flight')
+      }
+      const text = input.text.trim()
+      adapterBusy = true
+      return (async () => {
+        try {
+          const answered = await adapter.reply({ text })
+          requireDryPlan(answered, 'reply')
+          if (answered.args.text !== text) {
+            throw new TypeError('dry-run reply plan must record the answer text')
+          }
+          intents.push(toIntent(answered))
+          // State stays waiting. Reply is a worker answer, not the human PR yes.
+        } finally {
+          adapterBusy = false
+        }
+      })()
+    },
+    workerRelease() {
+      need(['converging'], 'release a worker')
+      if (path !== 'orca-worker') {
+        throw new IllegalTransitionError(state, 'release a worker on the coordinator-direct path')
+      }
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'release a worker while another adapter call is in flight')
+      }
+      adapterBusy = true
+      return (async () => {
+        try {
+          const released = await adapter.workerRelease()
+          requireDryPlan(released, 'worker-release')
+          intents.push(toIntent(released))
+          // State stays converging. Release is not an ask to open, update, or merge.
+        } finally {
+          adapterBusy = false
+        }
+      })()
     },
     askHumanPr(input) {
       need(['converging'], 'ask a human about the pull request')

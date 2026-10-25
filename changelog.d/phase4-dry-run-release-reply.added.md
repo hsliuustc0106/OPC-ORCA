@@ -1,0 +1,1 @@
+While waiting, the coordinator may reply to a worker ask in dry-run and record the answer text. After converging, the Orca worker path may record worker-release. Neither plan includes a run id, worker id, message id, or exit code. A live call still throws not-configured or not-implemented. Reply stays on waiting and is not the human PR yes.

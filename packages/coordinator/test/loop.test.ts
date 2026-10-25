@@ -124,11 +124,17 @@ test('adapter wiring is an explicit TODO, not a silent success', () => {
   assert.match(WIRE_ADAPTER_TODO, /waiting loop calls check in dryRun/)
   assert.match(WIRE_ADAPTER_TODO, /status, task-list, and worker-show/)
   assert.match(WIRE_ADAPTER_TODO, /not a substitute for check/)
+  assert.match(WIRE_ADAPTER_TODO, /reply may be called in dryRun/)
+  assert.match(WIRE_ADAPTER_TODO, /is not the human PR yes/)
+  assert.match(WIRE_ADAPTER_TODO, /worker-release may be called in dryRun/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bcheck\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bstatus\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\btask-list\b/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-show\b/)
-  assert.match(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-release\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-release\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\breply\b/)
+  assert.match(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-create\b/)
+  assert.match(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bgate-resolve\b/)
 })
 
 test('dry-run waiting loop records the check plan and does not invent a run id', async () => {
@@ -190,6 +196,8 @@ test('easy path does not record an Orca plan', () => {
   assert.throws(() => loop.status(), IllegalTransitionError)
   assert.throws(() => loop.taskList(), IllegalTransitionError)
   assert.throws(() => loop.workerShow(), IllegalTransitionError)
+  assert.throws(() => loop.reply({ text: 'yes' }), IllegalTransitionError)
+  assert.throws(() => loop.workerRelease(), IllegalTransitionError)
   assert.deepEqual(adapter.planned, [])
 })
 
@@ -598,4 +606,302 @@ test('a fabricated Orca id is not stored as success', async () => {
   assert.equal(loop.state, 'plan')
   assert.deepEqual(loop.snapshot().intents, [])
   assert.equal(loop.snapshot().githubWritePerformed, false)
+})
+
+function withReplyRelease(
+  handlers: {
+    reply?: (input: { text: string }) => Promise<PlannedOrcaCall>
+    workerRelease?: () => Promise<PlannedOrcaCall>
+  } = {},
+): OrcaAdapter {
+  const base = withObservation()
+  return {
+    ...base,
+    async reply(input: { text: string }) {
+      if (handlers.reply) return handlers.reply(input)
+      return { dryRun: true, command: 'reply', args: { text: input.text } }
+    },
+    async workerRelease() {
+      if (handlers.workerRelease) return handlers.workerRelease()
+      return { dryRun: true, command: 'worker-release', args: {} }
+    },
+  } as OrcaAdapter
+}
+
+test('reply while waiting records the answer and does not reach the human PR gate', async () => {
+  const adapter = createOrcaAdapter({ dryRun: true, env: { PATH: '' }, platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  await loop.startWorker()
+  assert.throws(() => loop.reply({ text: 'ship the tip' }), IllegalTransitionError)
+  assert.equal(loop.state, 'dispatched')
+  await loop.check({ converged: false })
+  assert.throws(() => loop.reply({ text: ' ' }), TypeError)
+  assert.throws(() => loop.reply({ text: '' }), TypeError)
+  await loop.reply({ text: '  ship the tip  ' })
+  await loop.reply({ text: 'yes' })
+  await loop.reply({ text: 'open' })
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().tipSha, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(loop.state, 'waiting')
+  const replies = loop.snapshot().intents.filter((intent) => intent.command === 'reply')
+  assert.deepEqual(
+    replies.map((intent) => intent.args),
+    [{ text: 'ship the tip' }, { text: 'yes' }, { text: 'open' }],
+  )
+  for (const intent of replies) {
+    assert.equal(intent.args.runId, undefined)
+    assert.equal(intent.args.messageId, undefined)
+    assert.equal(intent.args.exitCode, undefined)
+    assert.equal(intent.args.workerId, undefined)
+  }
+  assert.deepEqual(
+    adapter.planned.filter((call) => call.command === 'reply').map((call) => call.args),
+    [{ text: 'ship the tip' }, { text: 'yes' }, { text: 'open' }],
+  )
+  assert.throws(() => loop.workerRelease(), IllegalTransitionError)
+  assert.equal(
+    adapter.planned.some((call) => call.command === 'worker-release'),
+    false,
+  )
+  await loop.check({ converged: true })
+  assert.equal(loop.state, 'converging')
+  assert.throws(() => loop.reply({ text: 'still here' }), IllegalTransitionError)
+  assert.equal(loop.snapshot().intents.filter((intent) => intent.command === 'reply').length, 3)
+  await loop.workerRelease()
+  assert.equal(loop.state, 'converging')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  const release = loop.snapshot().intents.at(-1)
+  assert.equal(release?.command, 'worker-release')
+  assert.deepEqual(release?.args, {})
+  assert.equal(release?.args.workerId, undefined)
+  assert.equal(adapter.planned.at(-1)?.command, 'worker-release')
+  assert.deepEqual(adapter.planned.at(-1)?.args, {})
+  loop.askHumanPr({ sha: 'abc123', verdict })
+  assert.equal(loop.state, 'awaiting_human_pr')
+  assert.throws(() => loop.reply({ text: 'yes' }), IllegalTransitionError)
+  assert.throws(() => loop.workerRelease(), IllegalTransitionError)
+  assert.equal(loop.state, 'awaiting_human_pr')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.equal(loop.snapshot().intents.at(-1)?.command, 'worker-release')
+})
+
+test('a thrown reply is not an answer and does not leave waiting', async () => {
+  const notConfigured = new OrcaNotConfiguredError('orca CLI not found. reply is not configured.')
+  const blocked = await waitingLoop(
+    withReplyRelease({
+      reply: async () => {
+        throw notConfigured
+      },
+    }),
+  )
+  await assert.rejects(
+    () => blocked.reply({ text: 'ship the tip' }),
+    (caught: unknown) => caught === notConfigured,
+  )
+  assert.equal(blocked.state, 'waiting')
+  assert.equal(blocked.snapshot().humanDecision, null)
+  assert.equal(
+    blocked.snapshot().intents.some((intent) => intent.command === 'reply'),
+    false,
+  )
+  assert.equal(blocked.snapshot().githubWritePerformed, false)
+  assert.throws(() => blocked.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(blocked.state, 'waiting')
+
+  const notImplemented = new OrcaStubError(
+    'refusing to spawn orca reply: v0 stub, no success is returned',
+    ['orca', 'reply'],
+  )
+  const loop = await waitingLoop(
+    withReplyRelease({
+      reply: async () => {
+        throw notImplemented
+      },
+    }),
+  )
+  await assert.rejects(
+    () => loop.reply({ text: 'yes' }),
+    (caught: unknown) => {
+      assert.equal(caught, notImplemented)
+      assert.ok(caught instanceof OrcaStubError)
+      assert.equal(caught.code, 'not-implemented')
+      return true
+    },
+  )
+  assert.equal(loop.state, 'waiting')
+  assert.equal(
+    loop.snapshot().intents.some((intent) => intent.command === 'reply'),
+    false,
+  )
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+})
+
+test('a reply plan with an id or the wrong text is not stored', async () => {
+  const cases: Array<{
+    reply: () => Promise<PlannedOrcaCall>
+    message: RegExp
+  }> = [
+    {
+      reply: async () => ({ dryRun: true, command: 'reply', args: { text: 'ship the tip', runId: 'run-fake' } }),
+      message: /fabricated Orca id/,
+    },
+    {
+      reply: async () => ({ dryRun: true, command: 'reply', args: { text: 'ship the tip', messageId: 'msg-1' } }),
+      message: /fabricated Orca id/,
+    },
+    {
+      reply: async () => ({ dryRun: true, command: 'reply', args: { text: 'ship the tip', exitCode: '0' } }),
+      message: /fabricated Orca id/,
+    },
+    {
+      reply: async () => ({ dryRun: true, command: 'reply', args: { text: '   ' } }),
+      message: /answer text and no id/,
+    },
+    {
+      reply: async () => ({ dryRun: true, command: 'reply', args: { text: 'ship the tip', approved: 'yes' } }),
+      message: /answer text and no id/,
+    },
+    {
+      reply: async () => ({ dryRun: true, command: 'reply', args: { text: 'different' } }),
+      message: /reply plan must record the answer text/,
+    },
+    {
+      reply: async () =>
+        ({ dryRun: false, command: 'reply', args: { text: 'ship the tip' } }) as unknown as PlannedOrcaCall,
+      message: /refusing to treat an Orca result as success/,
+    },
+    {
+      reply: async () => ({ dryRun: true, command: 'check', args: { converged: 'true' } }),
+      message: /refusing to treat an Orca result as success/,
+    },
+  ]
+  for (const item of cases) {
+    const loop = await waitingLoop(withReplyRelease({ reply: item.reply }))
+    await assert.rejects(() => loop.reply({ text: 'ship the tip' }), item.message)
+    assert.equal(loop.state, 'waiting')
+    assert.equal(loop.snapshot().humanDecision, null)
+    assert.equal(
+      loop.snapshot().intents.some((intent) => intent.command === 'reply'),
+      false,
+    )
+    assert.equal(loop.snapshot().githubWritePerformed, false)
+    assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+    assert.equal(loop.state, 'waiting')
+  }
+})
+
+test('a thrown worker-release is not success and stays converging', async () => {
+  const notConfigured = new OrcaNotConfiguredError(
+    'orca CLI not found. worker-release is not configured.',
+  )
+  const blocked = await waitingLoop(
+    withReplyRelease({
+      workerRelease: async () => {
+        throw notConfigured
+      },
+    }),
+  )
+  await blocked.check({ converged: true })
+  assert.equal(blocked.state, 'converging')
+  await assert.rejects(
+    () => blocked.workerRelease(),
+    (caught: unknown) => caught === notConfigured,
+  )
+  assert.equal(blocked.state, 'converging')
+  assert.equal(
+    blocked.snapshot().intents.some((intent) => intent.command === 'worker-release'),
+    false,
+  )
+  assert.equal(blocked.snapshot().humanDecision, null)
+  assert.equal(blocked.snapshot().githubWritePerformed, false)
+
+  const notImplemented = new OrcaStubError(
+    'refusing to spawn orca worker-release: v0 stub, no success is returned',
+    ['orca', 'worker-release'],
+  )
+  const loop = await waitingLoop(
+    withReplyRelease({
+      workerRelease: async () => {
+        throw notImplemented
+      },
+    }),
+  )
+  await loop.check({ converged: true })
+  await assert.rejects(
+    () => loop.workerRelease(),
+    (caught: unknown) => {
+      assert.equal(caught, notImplemented)
+      assert.ok(caught instanceof OrcaStubError)
+      assert.equal(caught.code, 'not-implemented')
+      return true
+    },
+  )
+  assert.equal(loop.state, 'converging')
+  assert.equal(loop.snapshot().intents.at(-1)?.command, 'check')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'true')
+  assert.equal(loop.snapshot().humanDecision, null)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+})
+
+test('a worker-release plan with an id or a payload is not stored', async () => {
+  const cases: Array<{
+    workerRelease: () => Promise<PlannedOrcaCall>
+    message: RegExp
+  }> = [
+    {
+      workerRelease: async () => ({
+        dryRun: true,
+        command: 'worker-release',
+        args: { workerId: 'worker-fake' },
+      }),
+      message: /fabricated Orca id/,
+    },
+    {
+      workerRelease: async () => ({
+        dryRun: true,
+        command: 'worker-release',
+        args: { exitCode: '0' },
+      }),
+      message: /fabricated Orca id/,
+    },
+    {
+      workerRelease: async () => ({
+        dryRun: true,
+        command: 'worker-release',
+        args: { released: 'true' },
+      }),
+      message: /worker id or a payload/,
+    },
+    {
+      workerRelease: async () =>
+        ({ dryRun: false, command: 'worker-release', args: {} }) as unknown as PlannedOrcaCall,
+      message: /refusing to treat an Orca result as success/,
+    },
+    {
+      workerRelease: async () => ({ dryRun: true, command: 'reply', args: { text: 'yes' } }),
+      message: /refusing to treat an Orca result as success/,
+    },
+  ]
+  for (const item of cases) {
+    const loop = await waitingLoop(withReplyRelease({ workerRelease: item.workerRelease }))
+    await loop.check({ converged: true })
+    const before = loop.snapshot().intents.length
+    await assert.rejects(() => loop.workerRelease(), item.message)
+    assert.equal(loop.state, 'converging')
+    assert.equal(loop.snapshot().intents.length, before)
+    assert.equal(
+      loop.snapshot().intents.some((intent) => intent.command === 'worker-release'),
+      false,
+    )
+    assert.equal(loop.snapshot().humanDecision, null)
+    assert.equal(loop.snapshot().githubWritePerformed, false)
+  }
 })
