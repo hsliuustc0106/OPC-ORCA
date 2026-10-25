@@ -2,8 +2,9 @@
  * @opc-orca/plugin — DeepSeek Harness entrance for OPC-ORCA.
  *
  * Harness is the entrance. `apply` registers one `dig` tool: a goal goes in,
- * the coordinator runs, and a status summary comes out. Live spawn is off
- * unless `OPC_ORCA_LIVE=1` or `live: true`. The tool stops before
+ * the coordinator runs, and a status summary comes out. Live spawn is
+ * operator-owned: `OPC_ORCA_LIVE=1` and config `live` is not false. A tool
+ * caller passing `live: true` does not grant spawn. The tool stops before
  * `awaiting_human_pr` and does not open, update, or merge a pull request.
  *
  * @param {unknown} ctx
@@ -34,7 +35,8 @@ export function apply(ctx, config = {}) {
     name: 'dig',
     description:
       'Dig one goal through the OPC-ORCA coordinator. Default is dry-run and does not spawn. ' +
-      'Live spawn runs only when live is true or OPC_ORCA_LIVE=1. ' +
+      'Live spawn runs only when the operator set OPC_ORCA_LIVE=1 and plugin config live is not false. ' +
+      'A caller live true does not grant spawn. Caller or config live false forces dry-run. ' +
       'The summary stops before the human PR gate and does not open, update, or merge a pull request.',
     parameters: {
       goal: { type: 'string', required: true, description: 'Work to dig.' },
@@ -48,7 +50,8 @@ export function apply(ctx, config = {}) {
       },
       live: {
         type: 'boolean',
-        description: 'Spawn orca. Default dry-run. live false forces dry-run even if OPC_ORCA_LIVE=1.',
+        description:
+          'Request a live spawn. Ignored unless OPC_ORCA_LIVE=1 and config live is not false. live false forces dry-run.',
       },
       converged: {
         type: 'boolean',
@@ -66,13 +69,15 @@ export function apply(ctx, config = {}) {
      */
     async execute(args = {}) {
       const input = args && typeof args === 'object' ? args : {}
-      const live = input.live !== undefined ? input.live : config.live
+      // Forward both switches. runDig applies operator-wins: caller live true
+      // is not a grant, and config.live false vetoes OPC_ORCA_LIVE=1.
       return runDig({
         goal: typeof input.goal === 'string' ? input.goal : '',
         repo: typeof input.repo === 'string' ? input.repo : undefined,
         difficulty: typeof input.difficulty === 'string' ? input.difficulty : undefined,
         converged: typeof input.converged === 'boolean' ? input.converged : undefined,
-        live: typeof live === 'boolean' ? live : undefined,
+        live: typeof input.live === 'boolean' ? input.live : undefined,
+        configLive: typeof config.live === 'boolean' ? config.live : undefined,
         env: config.env,
       })
     },

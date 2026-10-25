@@ -15,10 +15,16 @@ export interface DigRequest {
   /** Required for a normal task. Passed to run-create. */
   repo?: string
   /**
-   * `true` spawns. `false` forces dry-run even when `OPC_ORCA_LIVE=1`.
-   * Omitted: live only when `env.OPC_ORCA_LIVE` (or `process.env`) is exactly `1`.
+   * Tool-caller request. `true` does not grant spawn. `false` forces dry-run
+   * even when `OPC_ORCA_LIVE=1`. Omitted follows the operator env.
    */
   live?: boolean
+  /**
+   * Plugin config. `false` forces dry-run even when the caller passes
+   * `live: true` and `OPC_ORCA_LIVE=1`. `true` does not grant spawn.
+   * Omitted does not veto.
+   */
+  configLive?: boolean
   /**
    * Dry-run check flag. Default false, so a dry-run dig stops in `waiting`.
    * A live check ignores this and uses stdout `converged:`.
@@ -42,10 +48,24 @@ export interface DigSummary {
   stopReason: string | null
 }
 
-function liveRequested(request: DigRequest): boolean {
-  if (request.live === true) return true
-  if (request.live === false) return false
-  const env = request.env ?? process.env
+export interface OperatorLiveInput {
+  /** Tool caller. `true` is not a grant. `false` forces dry-run. */
+  live?: boolean
+  /** Plugin config. `false` vetoes. `true` is not a grant. */
+  configLive?: boolean
+  /** Lookup for `OPC_ORCA_LIVE`. When set, `process.env` is not read. */
+  env?: DigEnv
+}
+
+/**
+ * Operator setting wins. Spawn only when `OPC_ORCA_LIVE` is exactly `1`
+ * and neither the tool caller nor plugin config set `live` to false.
+ * Caller `live: true` alone returns false. `configLive: true` alone returns false.
+ */
+export function operatorAllowsLive(input: OperatorLiveInput): boolean {
+  if (input.live === false) return false
+  if (input.configLive === false) return false
+  const env = input.env ?? process.env
   return env.OPC_ORCA_LIVE === '1'
 }
 
@@ -63,6 +83,9 @@ export async function runDig(request: DigRequest): Promise<DigSummary> {
   if (request.live !== undefined && typeof request.live !== 'boolean') {
     throw new TypeError('live must be true or false')
   }
+  if (request.configLive !== undefined && typeof request.configLive !== 'boolean') {
+    throw new TypeError('configLive must be true or false')
+  }
   if (request.converged !== undefined && typeof request.converged !== 'boolean') {
     throw new TypeError('converged must be true or false')
   }
@@ -73,7 +96,7 @@ export async function runDig(request: DigRequest): Promise<DigSummary> {
     throw new TypeError('difficulty must be easy or normal')
   }
 
-  const live = liveRequested(request)
+  const live = operatorAllowsLive(request)
   const env = request.env
   const platform = request.platform
   const adapterOptions: CreateOrcaAdapterOptions = {}

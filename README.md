@@ -21,13 +21,14 @@ Orca                      Run / Task / Dispatch
 worker                    default: dsh + a new-child worktree
 ```
 
-v0 is this layout. A dry-run records the dispatch plan, the waiting-loop check, observation (`status`, `task-list`, `worker-show`), a waiting-loop `reply`, backend `gate-create` and `gate-resolve` while waiting, and `worker-release` after converging, without the CLI. Observation does not converge. Reply and those backend gates are not the human PR yes. A live spawn of `orca` (Linux: `orca-ide`) runs only behind `OPC_ORCA_LIVE=1` or `live: true`, and it fails closed. The dig loop stores a parsed live result and advances on that parse. A throw does not advance. The loop still stops at `awaiting_human_pr`. Nothing here opens a pull request or enables a merge queue.
+v0 is this layout. A dry-run records the dispatch plan, the waiting-loop check, observation (`status`, `task-list`, `worker-show`), a waiting-loop `reply`, backend `gate-create` and `gate-resolve` while waiting, and `worker-release` after converging, without the CLI. Observation does not converge. Reply and those backend gates are not the human PR yes. A live spawn of `orca` (Linux: `orca-ide`) runs only when the operator set `OPC_ORCA_LIVE=1` and the plugin config `live` is not false. A dig tool caller passing `live: true` does not grant that spawn. The live path fails closed. The dig loop stores a parsed live result and advances on that parse. A throw does not advance. The loop still stops at `awaiting_human_pr`. Nothing here opens a pull request or enables a merge queue.
 
 ## Docs
 
 - [Architecture](docs/architecture.md) — Harness UI, plugin, adapter, coordinator, workers
 - [Autonomous development](docs/autonomous-dev.md) — auto to a reviewable tip; human for public GitHub writes
 - [Coordinator workflow](docs/coordinator-workflow.md) — intake through the PR ask
+- [Local test](docs/local-test.md) — macOS dry-run, then an operator-owned live dig
 - [AGENTS.md](AGENTS.md) — pipeline for coding agents
 - [LESSONS.md](LESSONS.md) — dated lessons (none yet)
 
@@ -43,7 +44,7 @@ npx -y @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile web add "github:hsliuustc010
 
 **DSH Desktop:** sidebar **Plugins** → **Add plugin**, paste that `github:` address, then **Install** and **Enable now**.
 
-The plugin registers a `dig` tool. The default is dry-run. It does not open a pull request.
+The plugin registers a `dig` tool. The default is dry-run. A caller `live: true` does not spawn. It does not open a pull request. The operator runbook is [local test](docs/local-test.md).
 
 ## Repo checks
 

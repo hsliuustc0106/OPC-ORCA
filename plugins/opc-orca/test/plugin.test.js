@@ -54,6 +54,7 @@ test('dig is the only tool and a dry-run call does not write GitHub', async () =
   const dig = loaded.tools[0]
   assert.equal(dig.name, 'dig')
   assert.match(dig.description, /dry-run/)
+  assert.match(dig.description, /does not grant spawn/)
   assert.match(dig.description, /does not open, update, or merge/)
   assert.equal(dig.parameters.goal.required, true)
 
@@ -108,13 +109,48 @@ test('live is opt-in and a missing binary does not become a summary', async () =
 
   const explicit = host()
   apply(explicit.ctx, { env: { PATH: '' } })
-  await assert.rejects(
-    () => explicit.tools[0].execute({ goal: 'fix the gate', repo, live: true }),
-    OrcaNotConfiguredError,
-  )
+  const callerOnly = await explicit.tools[0].execute({ goal: 'fix the gate', repo, live: true })
+  assert.equal(callerOnly.live, false)
+  assert.equal(callerOnly.state, 'waiting')
+  assert.equal(callerOnly.githubWritePerformed, false)
+  assert.equal(callerOnly.intents[0].args.runId, undefined)
   const stillDry = await explicit.tools[0].execute({ goal: 'fix the gate', repo, live: false })
   assert.equal(stillDry.live, false)
   assert.equal(stillDry.state, 'waiting')
+})
+
+test('operator setting wins over a dig caller live true', async () => {
+  const configOnly = host()
+  apply(configOnly.ctx, { live: true, env: { PATH: '' } })
+  const dryConfig = await configOnly.tools[0].execute({ goal: 'fix the gate', repo, live: true })
+  assert.equal(dryConfig.live, false)
+  assert.equal(dryConfig.state, 'waiting')
+  assert.equal(dryConfig.githubWritePerformed, false)
+
+  const veto = host()
+  apply(veto.ctx, { live: false, env: { PATH: '', OPC_ORCA_LIVE: '1' } })
+  const dryVeto = await veto.tools[0].execute({ goal: 'fix the gate', repo, live: true })
+  assert.equal(dryVeto.live, false)
+  assert.equal(dryVeto.state, 'waiting')
+  assert.equal(dryVeto.path, 'orca-worker')
+  assert.equal(dryVeto.githubWritePerformed, false)
+  assert.equal(dryVeto.intents[0].args.runId, undefined)
+
+  const allowed = host()
+  apply(allowed.ctx, { env: { PATH: '', OPC_ORCA_LIVE: '1' } })
+  await assert.rejects(
+    () => allowed.tools[0].execute({ goal: 'fix the gate', repo, live: true }),
+    OrcaNotConfiguredError,
+  )
+
+  const configAndEnv = host()
+  apply(configAndEnv.ctx, { live: true, env: { PATH: '', OPC_ORCA_LIVE: '1' } })
+  const easyLive = await configAndEnv.tools[0].execute({ goal: 'typo in the readme', live: true })
+  assert.equal(easyLive.live, true)
+  assert.equal(easyLive.state, 'converging')
+  assert.equal(easyLive.path, 'coordinator-direct')
+  assert.equal(easyLive.githubWritePerformed, false)
+  assert.notEqual(easyLive.state, 'awaiting_human_pr')
 })
 
 test('apply requires the tool registry and tolerates a host with no logger', () => {
