@@ -1,0 +1,1 @@
+While waiting, the coordinator may call status, task-list, and worker-show on the Orca adapter in dry-run and record those plans. Each plan is the command only: no run id, task id, worker id, or status payload. The state stays waiting. A live call still throws not-configured or not-implemented, and that throw is not a successful observation and not a substitute for check.

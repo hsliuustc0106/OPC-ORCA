@@ -38,6 +38,23 @@ export interface DigLoop {
    * and is not a converged tip. Does not invent a run id.
    */
   check(result: { converged: boolean }): Promise<void>
+  /**
+   * Observation while `waiting`. Calls the adapter's `status` in dry-run and
+   * records that plan. Does not change state. Not a check and not convergence.
+   * A rejection leaves the state on `waiting` and stores no status intent.
+   * Does not invent a run id or a status payload.
+   */
+  status(): Promise<void>
+  /**
+   * Observation while `waiting`. Calls the adapter's `task-list` in dry-run.
+   * Same failure rules as `status`. Not a substitute for `check`.
+   */
+  taskList(): Promise<void>
+  /**
+   * Observation while `waiting`. Calls the adapter's `worker-show` in dry-run.
+   * Same failure rules as `status`. Not a substitute for `check`.
+   */
+  workerShow(): Promise<void>
   /** Stop for a human. Requires one verdict for `sha`. Does not open a pull request. */
   askHumanPr(input: { sha: string; verdict: Verdict }): void
   /**
@@ -68,17 +85,18 @@ function normalizeVerdict(verdict: Verdict, previous: Verdict | null): Verdict {
 
 export interface DigLoopOptions {
   /**
-   * Adapter for normal-task dispatch and the waiting-loop check. Default:
-   * dry-run, no binary required. A live adapter is called the same way and
-   * must reject; the loop does not invent a run id from that rejection, and
-   * a rejected check is not converged.
+   * Adapter for normal-task dispatch, the waiting-loop check, and observation
+   * (`status`, `task-list`, `worker-show`). Default: dry-run, no binary
+   * required. A live adapter is called the same way and must reject; the loop
+   * does not invent a run id from that rejection. A rejected check is not
+   * converged. A rejected observation is not a successful read.
    */
   adapter?: OrcaAdapter
   /** Repository passed to run-create. Required before `bindRun`. */
   repo?: string
 }
 
-const FABRICATED_ID = /^(runId|taskId|exitCode)$/
+const FABRICATED_ID = /^(runId|taskId|workerId|exitCode)$/
 
 function toIntent(call: PlannedOrcaCall): Intent {
   return { command: call.command, args: { ...call.args } }
@@ -101,6 +119,12 @@ function requireDryPlan(call: PlannedOrcaCall, command: PlannedOrcaCall['command
   if (command === 'check') {
     if (call.args.converged !== 'true' && call.args.converged !== 'false') {
       throw new TypeError('dry-run check must record converged true or false')
+    }
+    return
+  }
+  if (command === 'status' || command === 'task-list' || command === 'worker-show') {
+    if (Object.keys(call.args).length !== 0) {
+      throw new TypeError('dry-run observation must not record an id or a status payload')
     }
     return
   }
@@ -139,6 +163,27 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
     githubWritePerformed: false,
     stopReason,
   })
+
+  const observe = (
+    command: 'status' | 'task-list' | 'worker-show',
+    action: string,
+    call: () => Promise<PlannedOrcaCall>,
+  ): Promise<void> => {
+    need(['waiting'], action)
+    if (adapterBusy) {
+      throw new IllegalTransitionError(state, `${action} while another adapter call is in flight`)
+    }
+    adapterBusy = true
+    return (async () => {
+      try {
+        const observed = await call()
+        requireDryPlan(observed, command)
+        intents.push(toIntent(observed))
+      } finally {
+        adapterBusy = false
+      }
+    })()
+  }
 
   return {
     get state() {
@@ -245,6 +290,15 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
           adapterBusy = false
         }
       })()
+    },
+    status() {
+      return observe('status', 'read status', () => adapter.status())
+    },
+    taskList() {
+      return observe('task-list', 'list tasks', () => adapter.taskList())
+    },
+    workerShow() {
+      return observe('worker-show', 'show a worker', () => adapter.workerShow())
     },
     askHumanPr(input) {
       need(['converging'], 'ask a human about the pull request')

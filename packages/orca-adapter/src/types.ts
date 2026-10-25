@@ -56,12 +56,43 @@ export interface CheckInput {
   converged?: boolean
 }
 
+export interface StatusInput {
+  /**
+   * Ignored. Dry-run does not copy a run id and does not return a status
+   * payload. Live calls ignore this too and still refuse.
+   */
+  runId?: string
+}
+
+export interface TaskListInput {
+  /**
+   * Live calls require this. Dry-run does not: there is no run yet, and the
+   * plan must not invent one. A supplied id is ignored, not returned.
+   */
+  runId?: string
+}
+
+export interface WorkerShowInput {
+  /**
+   * Live calls require this. Dry-run does not take a worker id and does not
+   * invent one. A supplied id is ignored, not returned.
+   */
+  workerId?: string
+}
+
 /** Commands a dry-run records. Other commands still reject. */
-export type PlannedOrcaCommand = 'run-create' | 'task-create' | 'worker-start' | 'check'
+export type PlannedOrcaCommand =
+  | 'run-create'
+  | 'task-create'
+  | 'worker-start'
+  | 'check'
+  | 'status'
+  | 'task-list'
+  | 'worker-show'
 
 /**
  * A plan, not a live Orca result. `dryRun` is always true. There is no run
- * id, task id, or exit code on this object.
+ * id, task id, worker id, exit code, or status payload on this object.
  */
 export interface PlannedOrcaCall {
   readonly dryRun: true
@@ -74,9 +105,14 @@ export interface OrcaAdapter {
   readonly executable: string | null
   /** True only when this adapter was created with `dryRun`. */
   readonly dryRun: boolean
-  /** Plans recorded by dry-run dispatch and check. Empty when `dryRun` is false. */
+  /** Plans recorded by dry-run dispatch, check, and observation. Empty when `dryRun` is false. */
   readonly planned: readonly PlannedOrcaCall[]
-  status(): Promise<never>
+  /**
+   * Dry-run resolves a plan and does not require the CLI. The plan has no
+   * run id and no status payload. Otherwise the promise rejects with
+   * not-configured or not-implemented.
+   */
+  status(input?: StatusInput): Promise<PlannedOrcaCall>
   /**
    * Dry-run resolves a plan and does not require the CLI. Otherwise the
    * promise rejects with not-configured or not-implemented and never
@@ -84,9 +120,19 @@ export interface OrcaAdapter {
    */
   runCreate(input: RunCreateInput): Promise<PlannedOrcaCall>
   taskCreate(input: TaskCreateInput): Promise<PlannedOrcaCall>
-  taskList(input: { runId: string }): Promise<never>
+  /**
+   * Dry-run resolves a plan and does not require the CLI or a run id.
+   * Otherwise the promise rejects with not-configured or not-implemented
+   * and never resolves a task list.
+   */
+  taskList(input?: TaskListInput): Promise<PlannedOrcaCall>
   workerStart(input: WorkerStartInput): Promise<PlannedOrcaCall>
-  workerShow(input: { workerId: string }): Promise<never>
+  /**
+   * Dry-run resolves a plan and does not require the CLI or a worker id.
+   * Otherwise the promise rejects with not-configured or not-implemented
+   * and never resolves a worker record.
+   */
+  workerShow(input?: WorkerShowInput): Promise<PlannedOrcaCall>
   workerRelease(input: { workerId: string }): Promise<never>
   /**
    * Dry-run resolves a plan with the caller's converged flag and does not

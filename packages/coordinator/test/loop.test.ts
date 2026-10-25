@@ -122,7 +122,13 @@ test('adapter wiring is an explicit TODO, not a silent success', () => {
   assert.match(WIRE_ADAPTER_TODO, /awaiting_human_pr/)
   assert.match(WIRE_ADAPTER_TODO, /coordinator-direct/)
   assert.match(WIRE_ADAPTER_TODO, /waiting loop calls check in dryRun/)
+  assert.match(WIRE_ADAPTER_TODO, /status, task-list, and worker-show/)
+  assert.match(WIRE_ADAPTER_TODO, /not a substitute for check/)
   assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bcheck\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bstatus\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\btask-list\b/)
+  assert.doesNotMatch(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-show\b/)
+  assert.match(WIRE_ADAPTER_TODO, /Still unwired:[^.]+\bworker-release\b/)
 })
 
 test('dry-run waiting loop records the check plan and does not invent a run id', async () => {
@@ -181,6 +187,9 @@ test('easy path does not record an Orca plan', () => {
   loop.triage({ agentReady: true, difficulty: 'easy' })
   loop.runDirect()
   assert.equal(loop.state, 'converging')
+  assert.throws(() => loop.status(), IllegalTransitionError)
+  assert.throws(() => loop.taskList(), IllegalTransitionError)
+  assert.throws(() => loop.workerShow(), IllegalTransitionError)
   assert.deepEqual(adapter.planned, [])
 })
 
@@ -366,6 +375,204 @@ test('a fabricated run id on check is not stored as converged', async () => {
     false,
   )
   assert.equal(loop.snapshot().githubWritePerformed, false)
+})
+
+function observationPlan(
+  command: 'status' | 'task-list' | 'worker-show',
+  args: Record<string, string> = {},
+): PlannedOrcaCall {
+  return { dryRun: true, command, args }
+}
+
+function withObservation(
+  handlers: {
+    status?: () => Promise<PlannedOrcaCall>
+    taskList?: () => Promise<PlannedOrcaCall>
+    workerShow?: () => Promise<PlannedOrcaCall>
+  } = {},
+): OrcaAdapter {
+  const base = dispatchThen(async (input) => ({
+    dryRun: true,
+    command: 'check',
+    args: { converged: input.converged ? 'true' : 'false' },
+  }))
+  return {
+    ...base,
+    async status() {
+      if (handlers.status) return handlers.status()
+      return observationPlan('status')
+    },
+    async taskList() {
+      if (handlers.taskList) return handlers.taskList()
+      return observationPlan('task-list')
+    },
+    async workerShow() {
+      if (handlers.workerShow) return handlers.workerShow()
+      return observationPlan('worker-show')
+    },
+  } as OrcaAdapter
+}
+
+async function waitingLoop(adapter: OrcaAdapter) {
+  const loop = await dispatchedLoop(adapter)
+  await loop.check({ converged: false })
+  return loop
+}
+
+test('waiting observation records plans and does not converge', async () => {
+  const adapter = createOrcaAdapter({ dryRun: true, env: { PATH: '' }, platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  assert.throws(() => loop.taskList(), IllegalTransitionError)
+  assert.deepEqual(
+    adapter.planned.map((call) => call.command),
+    ['run-create', 'task-create'],
+  )
+  await loop.startWorker()
+  assert.throws(() => loop.status(), IllegalTransitionError)
+  assert.throws(() => loop.workerShow(), IllegalTransitionError)
+  assert.deepEqual(
+    adapter.planned.map((call) => call.command),
+    ['run-create', 'task-create', 'worker-start'],
+  )
+  await loop.check({ converged: false })
+  await loop.status()
+  await loop.taskList()
+  await loop.workerShow()
+  assert.equal(loop.state, 'waiting')
+  assert.deepEqual(
+    adapter.planned.map((call) => call.command),
+    ['run-create', 'task-create', 'worker-start', 'check', 'status', 'task-list', 'worker-show'],
+  )
+  for (const call of adapter.planned.slice(4)) {
+    assert.equal(call.dryRun, true)
+    assert.deepEqual(call.args, {})
+    assert.equal(call.args.runId, undefined)
+    assert.equal(call.args.taskId, undefined)
+    assert.equal(call.args.workerId, undefined)
+    assert.equal(call.args.exitCode, undefined)
+  }
+  assert.deepEqual(
+    loop.snapshot().intents.map((intent) => intent.command),
+    adapter.planned.map((call) => call.command),
+  )
+  for (const intent of loop.snapshot().intents.slice(4)) {
+    assert.deepEqual(intent.args, {})
+  }
+  await loop.check({ converged: true })
+  assert.equal(loop.state, 'converging')
+  assert.equal(loop.snapshot().intents.at(-1)?.command, 'check')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'true')
+  assert.throws(() => loop.status(), IllegalTransitionError)
+  assert.equal(loop.state, 'converging')
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+})
+
+test('a thrown observation is not success and does not converge', async () => {
+  const notConfigured = new OrcaNotConfiguredError('orca CLI not found. status is not configured.')
+  const blocked = await waitingLoop(
+    withObservation({
+      status: async () => {
+        throw notConfigured
+      },
+    }),
+  )
+  await assert.rejects(
+    () => blocked.status(),
+    (caught: unknown) => caught === notConfigured,
+  )
+  assert.equal(blocked.state, 'waiting')
+  assert.deepEqual(
+    blocked.snapshot().intents.map((intent) => intent.command),
+    ['run-create', 'task-create', 'worker-start', 'check'],
+  )
+
+  const notImplemented = new OrcaStubError(
+    'refusing to spawn orca task-list: v0 stub, no success is returned',
+    ['orca', 'task-list'],
+  )
+  const loop = await waitingLoop(
+    withObservation({
+      taskList: async () => {
+        throw notImplemented
+      },
+    }),
+  )
+  await loop.status()
+  await assert.rejects(
+    () => loop.taskList(),
+    (caught: unknown) => {
+      assert.equal(caught, notImplemented)
+      assert.ok(caught instanceof OrcaStubError)
+      assert.equal(caught.code, 'not-implemented')
+      return true
+    },
+  )
+  assert.equal(loop.state, 'waiting')
+  assert.deepEqual(
+    loop.snapshot().intents.map((intent) => intent.command),
+    ['run-create', 'task-create', 'worker-start', 'check', 'status'],
+  )
+  assert.deepEqual(loop.snapshot().intents.at(-1)?.args, {})
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  await loop.workerShow()
+  await loop.check({ converged: true })
+  assert.equal(loop.state, 'converging')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'true')
+})
+
+test('an observation plan with an id or a status payload is not stored', async () => {
+  const cases: Array<{
+    call: (loop: Awaited<ReturnType<typeof waitingLoop>>) => Promise<void>
+    handlers: Parameters<typeof withObservation>[0]
+    message: RegExp
+  }> = [
+    {
+      call: (loop) => loop.status(),
+      handlers: { status: async () => observationPlan('status', { runId: 'run-fake' }) },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.taskList(),
+      handlers: { taskList: async () => observationPlan('task-list', { taskId: 'task-fake' }) },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.workerShow(),
+      handlers: { workerShow: async () => observationPlan('worker-show', { workerId: 'worker-fake' }) },
+      message: /fabricated Orca id/,
+    },
+    {
+      call: (loop) => loop.status(),
+      handlers: { status: async () => observationPlan('status', { phase: 'running', status: 'ok' }) },
+      message: /status payload/,
+    },
+    {
+      call: (loop) => loop.workerShow(),
+      handlers: { workerShow: async () => observationPlan('worker-show', { converged: 'true' }) },
+      message: /status payload/,
+    },
+    {
+      call: (loop) => loop.taskList(),
+      handlers: {
+        taskList: async () =>
+          ({ dryRun: true, command: 'check', args: { converged: 'true' } }) as PlannedOrcaCall,
+      },
+      message: /refusing to treat an Orca result as success/,
+    },
+  ]
+  for (const item of cases) {
+    const loop = await waitingLoop(withObservation(item.handlers))
+    await assert.rejects(() => item.call(loop), item.message)
+    assert.equal(loop.state, 'waiting')
+    assert.deepEqual(
+      loop.snapshot().intents.map((intent) => intent.command),
+      ['run-create', 'task-create', 'worker-start', 'check'],
+    )
+    assert.equal(loop.snapshot().githubWritePerformed, false)
+  }
 })
 
 test('a fabricated Orca id is not stored as success', async () => {

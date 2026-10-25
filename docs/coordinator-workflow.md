@@ -1,6 +1,6 @@
 # Coordinator workflow
 
-The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, `worker-start`, and `check`, and store that plan as intents. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id or treat the throw as converged. Commands that are still only named, not called, stay on `WIRE_ADAPTER_TODO`.
+The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, `worker-start`, and `check`, and store that plan as intents. While `waiting`, they may also record `status`, `task-list`, and `worker-show`. Those observation plans do not converge. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id, a status payload, or treat the throw as converged. Commands that are still only named, not called, stay on `WIRE_ADAPTER_TODO`.
 
 ```
 intake
@@ -10,7 +10,7 @@ intake
           → converging               (easy: coordinator-direct)
           → run_bound                (normal: run-create + task-create)
               → dispatched           (worker-start)
-                  → waiting          (check loop, not converged)
+                  → waiting          (check not converged; may record status, task-list, worker-show)
                   → converging       (check converged)
           → awaiting_human_pr        (PR ask — stop)
               → done                 (human yes or no; still no GitHub write)
@@ -33,7 +33,7 @@ Decide whether the goal is ready to dig.
 
 `plan` is where the path splits.
 
-- **Easy → coordinator-direct.** The coordinator does the work in the current checkout. No `run-create`, no `task-create`, no `worker-start`, no `check`. Next state: `converging`.
+- **Easy → coordinator-direct.** The coordinator does the work in the current checkout. No `run-create`, no `task-create`, no `worker-start`, no `check`, and no observation. Next state: `converging`.
 - **Normal → Orca.** Next step is run-create. The coordinator will not take the direct path for a normal task.
 
 ### 4. Run-create and task-create (`run_bound`)
@@ -59,6 +59,8 @@ The coordinator calls the adapter’s `check` in dry-run and stores that plan as
 - Converged: go to `converging`.
 
 Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself in v0; the caller passes `converged: true` or `false`, and dry-run records that flag. A thrown stub (`not-configured` or `not-implemented`) is failure, not converged.
+
+While the state is `waiting`, the coordinator may call `status`, `task-list`, and `worker-show` in dry-run. Each recorded plan is the command only: no run id, task id, worker id, or status payload. The state stays `waiting`. These calls are not convergence and are not a substitute for `check`. A throw leaves the state on `waiting` and does not store that call’s intent. Calling them before `waiting`, or after `check` has entered `converging`, is an illegal transition.
 
 ### 7. Converge (`converging`)
 
@@ -95,4 +97,4 @@ Normal means Orca owns execution. The path is `plan` → `run_bound` → `dispat
 
 ## Adapter commands not used by this loop yet
 
-`status`, `task-list`, `worker-show`, `worker-release`, `reply`, `gate-create`, and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not call them. `gate-resolve` must not be used as a stand-in for the human PR yes.
+`worker-release`, `reply`, `gate-create`, and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not call them. `gate-resolve` must not be used as a stand-in for the human PR yes. `status`, `task-list`, and `worker-show` are observation while `waiting`. They do not stand in for `check`.

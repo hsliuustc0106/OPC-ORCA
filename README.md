@@ -21,7 +21,7 @@ Orca                      Run / Task / Dispatch
 worker                    default: dsh + a new-child worktree
 ```
 
-v0 is this layout and the stubs. A dry-run records the dispatch plan and the waiting-loop check without the CLI. Nothing here calls a live Orca, opens a pull request, or enables a merge queue.
+v0 is this layout and the stubs. A dry-run records the dispatch plan, the waiting-loop check, and observation (`status`, `task-list`, `worker-show`) without the CLI. Observation does not converge. Nothing here calls a live Orca, opens a pull request, or enables a merge queue.
 
 ## Docs
 
