@@ -75,6 +75,16 @@ test('present CLI still refuses to spawn', async () => {
     () => adapter.workerStart({ taskId: 'task-1', worker: 'other' as 'dsh' }),
     TypeError,
   )
+  await assert.rejects(
+    () => adapter.check({ runId: 'run-1', converged: true }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaStubError)
+      assert.equal(error.code, 'not-implemented')
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'check'])
+      return true
+    },
+  )
+  assert.deepEqual(adapter.planned, [])
 })
 
 test('dry-run records dispatch without a binary and does not return ids', async () => {
@@ -101,14 +111,30 @@ test('dry-run records dispatch without a binary and does not return ids', async 
   assert.deepEqual(run.args, { goal: 'dig', repo: 'hsliuustc0106/OPC-ORCA', base: 'origin/main' })
   assert.deepEqual(task.args, { title: 'dig', worker: 'dsh', worktree: 'new-child' })
   assert.deepEqual(started.args, { worker: 'dsh', worktree: 'new-child' })
+  const checked = await adapter.check({ runId: 'run-fake', converged: false })
+  assert.equal(checked.dryRun, true)
+  assert.equal(checked.command, 'check')
+  assert.deepEqual(checked.args, { converged: 'false' })
+  assert.equal(Object.hasOwn(checked.args, 'runId'), false)
+  assert.equal(Object.hasOwn(checked.args, 'exitCode'), false)
   assert.deepEqual(
     adapter.planned.map((call) => call.command),
-    ['run-create', 'task-create', 'worker-start'],
+    ['run-create', 'task-create', 'worker-start', 'check'],
   )
   await assert.rejects(() => adapter.status(), OrcaNotConfiguredError)
-  await assert.rejects(() => adapter.check({ runId: 'run-1' }), OrcaNotConfiguredError)
+  await assert.rejects(() => adapter.check({ runId: 'run-1' }), TypeError)
+  await assert.rejects(() => adapter.reply({ runId: 'run-1', text: 'hi' }), OrcaNotConfiguredError)
+  await assert.rejects(() => adapter.gateCreate({ runId: 'run-1', reason: 'wait' }), OrcaNotConfiguredError)
+  await assert.rejects(() => adapter.gateResolve({ gateId: 'gate-1', resolution: 'yes' }), OrcaNotConfiguredError)
   await assert.rejects(() => adapter.taskCreate({ title: 'dig', worker: 'other' as 'dsh' }), TypeError)
-  assert.equal(adapter.planned.length, 3)
+  assert.equal(adapter.planned.length, 4)
+
+  const dir = binDir(['orca'])
+  const present = createOrcaAdapter({ dryRun: true, env: { PATH: dir }, platform: 'linux' })
+  const again = await present.check({ converged: true })
+  assert.deepEqual(again.args, { converged: 'true' })
+  assert.equal(Object.hasOwn(again.args, 'runId'), false)
+  assert.equal(present.planned.length, 1)
 })
 
 test('live path does not resolve a run id', async () => {
@@ -127,6 +153,8 @@ test('live path does not resolve a run id', async () => {
     OrcaNotConfiguredError,
   )
   await assert.rejects(() => missing.workerStart({ taskId: 'task-1' }), OrcaNotConfiguredError)
+  await assert.rejects(() => missing.check({ runId: 'run-1' }), OrcaNotConfiguredError)
+  await assert.rejects(() => missing.check({ converged: true }), TypeError)
   assert.equal(resolved, false)
   assert.deepEqual(missing.planned, [])
 
@@ -141,6 +169,7 @@ test('live path does not resolve a run id', async () => {
     },
   )
   await assert.rejects(() => present.workerStart({ taskId: 'task-1' }), OrcaStubError)
+  await assert.rejects(() => present.check({ runId: 'run-1', converged: true }), OrcaStubError)
   assert.deepEqual(present.planned, [])
 })
 

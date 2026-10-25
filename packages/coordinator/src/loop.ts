@@ -32,10 +32,12 @@ export interface DigLoop {
    */
   startWorker(): Promise<void>
   /**
-   * Check loop. `converged: true` enters `converging`; otherwise stays in `waiting`.
-   * Does not call adapter.check: a stub throw is not a converged tip.
+   * Waiting-loop check. Calls the adapter's `check`. A dry-run plan is stored
+   * only after the call resolves; that plan's converged flag picks `waiting`
+   * or `converging`. A rejection leaves the state on `dispatched` or `waiting`
+   * and is not a converged tip. Does not invent a run id.
    */
-  check(result: { converged: boolean }): void
+  check(result: { converged: boolean }): Promise<void>
   /** Stop for a human. Requires one verdict for `sha`. Does not open a pull request. */
   askHumanPr(input: { sha: string; verdict: Verdict }): void
   /**
@@ -66,9 +68,10 @@ function normalizeVerdict(verdict: Verdict, previous: Verdict | null): Verdict {
 
 export interface DigLoopOptions {
   /**
-   * Adapter for normal-task dispatch. Default: dry-run, no binary required.
-   * A live adapter is called the same way and must reject; the loop does not
-   * invent a run id from that rejection.
+   * Adapter for normal-task dispatch and the waiting-loop check. Default:
+   * dry-run, no binary required. A live adapter is called the same way and
+   * must reject; the loop does not invent a run id from that rejection, and
+   * a rejected check is not converged.
    */
   adapter?: OrcaAdapter
   /** Repository passed to run-create. Required before `bindRun`. */
@@ -92,6 +95,12 @@ function requireDryPlan(call: PlannedOrcaCall, command: PlannedOrcaCall['command
   if (command === 'run-create') {
     if (call.args.base !== 'origin/main') {
       throw new TypeError('dry-run run-create must record base origin/main')
+    }
+    return
+  }
+  if (command === 'check') {
+    if (call.args.converged !== 'true' && call.args.converged !== 'false') {
+      throw new TypeError('dry-run check must record converged true or false')
     }
     return
   }
@@ -217,9 +226,25 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
     },
     check(result) {
       need(['dispatched', 'waiting'], 'check')
-      // Local flag only. adapter.check still throws, and that throw is not converged.
-      intents.push({ command: 'check', args: { converged: result.converged ? 'true' : 'false' } })
-      state = result.converged ? 'converging' : 'waiting'
+      if (typeof result.converged !== 'boolean') throw new TypeError('converged must be true or false')
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'check while another adapter call is in flight')
+      }
+      const flag = result.converged ? 'true' : 'false'
+      adapterBusy = true
+      return (async () => {
+        try {
+          const checked = await adapter.check({ converged: result.converged })
+          requireDryPlan(checked, 'check')
+          if (checked.args.converged !== flag) {
+            throw new TypeError('dry-run check plan must record the caller converged flag')
+          }
+          intents.push(toIntent(checked))
+          state = checked.args.converged === 'true' ? 'converging' : 'waiting'
+        } finally {
+          adapterBusy = false
+        }
+      })()
     },
     askHumanPr(input) {
       need(['converging'], 'ask a human about the pull request')

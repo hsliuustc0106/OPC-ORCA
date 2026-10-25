@@ -1,0 +1,1 @@
+The waiting loop calls the Orca adapter check in dry-run and records that plan. The plan stores the caller's converged flag and does not include a run id. A live check still throws not-configured or not-implemented, and the loop does not treat that throw as converged.

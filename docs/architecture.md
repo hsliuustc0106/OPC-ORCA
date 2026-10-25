@@ -56,11 +56,11 @@ Each live wrapper checks its arguments, then refuses:
 - no executable → error code `not-configured`
 - executable present → error code `not-implemented`, with the argv a later change will spawn
 
-`dryRun: true` is the exception for `run-create`, `task-create`, and `worker-start` only. Those calls record a plan and do not need the binary. The plan has no run id, task id, or exit code. Every other command still refuses, including when dry-run is on. The package does not import `child_process` in v0, so a stub cannot succeed by accident. Orca’s own `gate-create` / `gate-resolve` are backend gates. They are not the GitHub human PR gate and v0 does not call them.
+`dryRun: true` is the exception for `run-create`, `task-create`, `worker-start`, and `check` only. Those calls record a plan and do not need the binary. The plan has no run id, task id, or exit code. `check` records the caller’s converged flag. Every other command still refuses, including when dry-run is on. The package does not import `child_process` in v0, so a stub cannot succeed by accident. Orca’s own `gate-create` / `gate-resolve` are backend gates. They are not the GitHub human PR gate and v0 does not call them.
 
 ## Coordinator
 
-`packages/coordinator` owns the dig-loop states. Normal tasks call the adapter in dry-run and record that plan (`run-create`, `task-create`, `worker-start` for **dsh** in a **new-child** worktree). They do not spawn. `WIRE_ADAPTER_TODO` is what is still unwired (check, gates, live spawn): a thrown adapter error is failure, not a converged tip, and the easy-task path skips worker dispatch.
+`packages/coordinator` owns the dig-loop states. Normal tasks call the adapter in dry-run and record that plan (`run-create`, `task-create`, `worker-start` for **dsh** in a **new-child** worktree, then `check` on the waiting loop). They do not spawn. `WIRE_ADAPTER_TODO` is what is still unwired (reply, gates, live spawn): a thrown adapter error is failure, not a converged tip, and the easy-task path skips worker dispatch.
 
 States: `intake`, `triage`, `plan`, `run_bound`, `dispatched`, `waiting`, `converging`, `awaiting_human_pr`, `done`.
 

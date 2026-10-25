@@ -4,6 +4,7 @@ export type { ResolveOptions } from './resolve.ts'
 export { createOrcaAdapter } from './adapter.ts'
 export type { CreateOrcaAdapterOptions } from './adapter.ts'
 export type {
+  CheckInput,
   OrcaAdapter,
   OrcaCommand,
   OrcaWorker,

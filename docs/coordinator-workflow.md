@@ -1,6 +1,6 @@
 # Coordinator workflow
 
-The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, and `worker-start`, and store that plan as intents. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id or treat the throw as converged. Commands that are still only named, not called, stay on `WIRE_ADAPTER_TODO`.
+The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, `worker-start`, and `check`, and store that plan as intents. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id or treat the throw as converged. Commands that are still only named, not called, stay on `WIRE_ADAPTER_TODO`.
 
 ```
 intake
@@ -33,7 +33,7 @@ Decide whether the goal is ready to dig.
 
 `plan` is where the path splits.
 
-- **Easy → coordinator-direct.** The coordinator does the work in the current checkout. No `run-create`, no `task-create`, no `worker-start`. Next state: `converging`.
+- **Easy → coordinator-direct.** The coordinator does the work in the current checkout. No `run-create`, no `task-create`, no `worker-start`, no `check`. Next state: `converging`.
 - **Normal → Orca.** Next step is run-create. The coordinator will not take the direct path for a normal task.
 
 ### 4. Run-create and task-create (`run_bound`)
@@ -53,12 +53,12 @@ The child worktree is new for this task. It is not the coordinator’s checkout 
 
 ### 6. Check loop (`waiting`)
 
-Each check records a `check` intent.
+The coordinator calls the adapter’s `check` in dry-run and stores that plan as the `check` intent. The plan is the caller’s `converged` flag. It has no run id. A throw leaves the state where it was (`dispatched` or `waiting`) and stores no check intent.
 
-- Not converged: stay in `waiting`. The first check may enter `waiting` from `dispatched`.
+- Not converged: stay in `waiting`. The first successful check may enter `waiting` from `dispatched`.
 - Converged: go to `converging`.
 
-Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself in v0; the caller passes `converged: true` or `false`. A later wire-up should use the adapter’s `check` and refuse to treat a thrown stub as converged.
+Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself in v0; the caller passes `converged: true` or `false`, and dry-run records that flag. A thrown stub (`not-configured` or `not-implemented`) is failure, not converged.
 
 ### 7. Converge (`converging`)
 
@@ -95,4 +95,4 @@ Normal means Orca owns execution. The path is `plan` → `run_bound` → `dispat
 
 ## Adapter commands not used by this loop yet
 
-`status`, `task-list`, `worker-show`, `worker-release`, `check`, `reply`, `gate-create`, and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not call them. The `check` intent is still the caller's converged flag, not `adapter.check`. `gate-resolve` must not be used as a stand-in for the human PR yes.
+`status`, `task-list`, `worker-show`, `worker-release`, `reply`, `gate-create`, and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not call them. `gate-resolve` must not be used as a stand-in for the human PR yes.

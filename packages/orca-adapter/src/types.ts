@@ -43,8 +43,21 @@ export interface WorkerStartInput {
   worktree?: OrcaWorktree
 }
 
+export interface CheckInput {
+  /**
+   * Live calls require this. Dry-run does not: there is no run yet, and the
+   * plan must not invent one. A supplied id is ignored, not returned.
+   */
+  runId?: string
+  /**
+   * Dry-run records this caller flag as `true` or `false`. It is not an Orca
+   * result. Live calls ignore it and still refuse.
+   */
+  converged?: boolean
+}
+
 /** Commands a dry-run records. Other commands still reject. */
-export type PlannedOrcaCommand = 'run-create' | 'task-create' | 'worker-start'
+export type PlannedOrcaCommand = 'run-create' | 'task-create' | 'worker-start' | 'check'
 
 /**
  * A plan, not a live Orca result. `dryRun` is always true. There is no run
@@ -61,7 +74,7 @@ export interface OrcaAdapter {
   readonly executable: string | null
   /** True only when this adapter was created with `dryRun`. */
   readonly dryRun: boolean
-  /** Plans recorded by dry-run dispatch. Empty when `dryRun` is false. */
+  /** Plans recorded by dry-run dispatch and check. Empty when `dryRun` is false. */
   readonly planned: readonly PlannedOrcaCall[]
   status(): Promise<never>
   /**
@@ -75,7 +88,12 @@ export interface OrcaAdapter {
   workerStart(input: WorkerStartInput): Promise<PlannedOrcaCall>
   workerShow(input: { workerId: string }): Promise<never>
   workerRelease(input: { workerId: string }): Promise<never>
-  check(input: { runId: string }): Promise<never>
+  /**
+   * Dry-run resolves a plan with the caller's converged flag and does not
+   * require the CLI or a run id. Otherwise the promise rejects with
+   * not-configured or not-implemented and never resolves a run id.
+   */
+  check(input: CheckInput): Promise<PlannedOrcaCall>
   reply(input: { runId: string; text: string }): Promise<never>
   gateCreate(input: { runId: string; reason: string }): Promise<never>
   gateResolve(input: { gateId: string; resolution: string }): Promise<never>
