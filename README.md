@@ -6,7 +6,7 @@ DeepSeek Harness is the entrance. A Harness plugin asks for the work. [Orca](doc
 DeepSeek Harness (desktop / web)
         │  plugin
         ▼
-plugins/opc-orca          @opc-orca/plugin   (stub, registers nothing)
+plugins/opc-orca          @opc-orca/plugin   (`dig` tool; default dry-run)
         │
         ▼
 packages/coordinator      dig-loop states; stops at the human PR gate
@@ -21,7 +21,7 @@ Orca                      Run / Task / Dispatch
 worker                    default: dsh + a new-child worktree
 ```
 
-v0 is this layout and the stubs. A dry-run records the dispatch plan, the waiting-loop check, observation (`status`, `task-list`, `worker-show`), a waiting-loop `reply`, backend `gate-create` and `gate-resolve` while waiting, and `worker-release` after converging, without the CLI. Observation does not converge. Reply and those backend gates are not the human PR yes. A live spawn of `orca` (Linux: `orca-ide`) runs only behind `OPC_ORCA_LIVE=1` or the adapter `live` option, and it fails closed. The dig loop still stores only dry-run plans. Nothing here opens a pull request or enables a merge queue.
+v0 is this layout. A dry-run records the dispatch plan, the waiting-loop check, observation (`status`, `task-list`, `worker-show`), a waiting-loop `reply`, backend `gate-create` and `gate-resolve` while waiting, and `worker-release` after converging, without the CLI. Observation does not converge. Reply and those backend gates are not the human PR yes. A live spawn of `orca` (Linux: `orca-ide`) runs only behind `OPC_ORCA_LIVE=1` or `live: true`, and it fails closed. The dig loop stores a parsed live result and advances on that parse. A throw does not advance. The loop still stops at `awaiting_human_pr`. Nothing here opens a pull request or enables a merge queue.
 
 ## Docs
 
@@ -43,7 +43,7 @@ npx -y @deepseek-ai/dsh@0.2.0-rc.2 plugin --profile web add "github:hsliuustc010
 
 **DSH Desktop:** sidebar **Plugins** → **Add plugin**, paste that `github:` address, then **Install** and **Enable now**.
 
-The stub loads and registers no tools. Do not point it at a real repo and expect a dig loop.
+The plugin registers a `dig` tool. The default is dry-run. It does not open a pull request.
 
 ## Repo checks
 

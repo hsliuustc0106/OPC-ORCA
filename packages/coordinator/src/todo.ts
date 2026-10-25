@@ -1,19 +1,20 @@
 /**
  * What is still unwired after dry-run dispatch, the waiting-loop check,
- * observation, reply, worker-release, and backend gates. Normal tasks call
- * the adapter for run-create, task-create, worker-start, and check when
- * `dryRun` is set. While waiting they may also call status, task-list,
- * worker-show, reply, gate-create, and gate-resolve in dryRun. After
- * converging, the Orca worker path may call worker-release in dryRun. A
- * thrown adapter error is failure, not a converged tip, not a successful
- * observation, not a worker answer, not a released worker, and not a
- * created or resolved backend gate. Do not treat a stub throw as success.
- * Observation is not a substitute for check. Reply is not the human PR yes
- * and does not move awaiting_human_pr. gate-create and gate-resolve are
- * Orca backend gates for a worker or task decision. They stay on waiting
- * and do not move awaiting_human_pr. Live spawn is wired behind
- * OPC_ORCA_LIVE=1 or the adapter live option and fails closed. The loop
- * still stores only dry-run plans, so a live result does not advance state.
+ * observation, reply, worker-release, backend gates, and consumption of a
+ * parsed live result. Normal tasks call the adapter for run-create,
+ * task-create, worker-start, and check when `dryRun` is set. While waiting
+ * they may also call status, task-list, worker-show, reply, gate-create,
+ * and gate-resolve in dryRun. After converging, the Orca worker path may
+ * call worker-release in dryRun. A thrown adapter error is failure, not a
+ * converged tip, not a successful observation, not a worker answer, not a
+ * released worker, and not a created or resolved backend gate. Do not treat
+ * a stub throw as success. Observation is not a substitute for check. Reply
+ * is not the human PR yes and does not move awaiting_human_pr. gate-create
+ * and gate-resolve are Orca backend gates for a worker or task decision.
+ * They stay on waiting and do not move awaiting_human_pr. Live spawn is
+ * wired behind OPC_ORCA_LIVE=1 or the adapter live option and fails closed.
+ * The loop stores a parsed live result and advances on that parse. A throw
+ * does not advance state. The loop still stops at awaiting_human_pr.
  */
 export const WIRE_ADAPTER_TODO =
   'TODO(wire-adapter): normal-task run-create, task-create, and worker-start ' +
@@ -39,8 +40,10 @@ export const WIRE_ADAPTER_TODO =
   'is on PATH, or not-implemented when the binary is present and nothing is spawned. That throw is failure, ' +
   'not a converged tip, not a successful reply or release, and not a resolved gate. ' +
   'With the live flag, the adapter spawns the binary and parses stdout for ids. ' +
-  'A missing binary, a non-zero exit, and unparseable stdout throw and are failure. ' +
-  'The loop stores only dry-run plans, so a live result does not advance the coordinator and does not move awaiting_human_pr. ' +
+  'A missing binary, a non-zero exit, and unparseable stdout throw and are failure, ' +
+  'and that throw does not advance the coordinator. ' +
+  'A parsed live result (run id, task id, worker id, status, converged) is stored and advances state. ' +
+  'Dry-run plans stay free of those ids. ' +
+  'The loop still stops at awaiting_human_pr: do not open, update, or merge a pull request here. ' +
   'Easy tasks stay on the coordinator-direct path and skip worker dispatch. ' +
-  'awaiting_human_pr stops the loop: do not open, update, or merge a pull request here. ' +
   'Orca gate-resolve is not a substitute for the human PR yes.'

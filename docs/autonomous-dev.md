@@ -63,7 +63,7 @@ FlyBot roles collapse onto two processes here: the **coordinator** (intake, tria
 
 ## Not in this phase
 
-- Treating a live `orca` / `orca-ide` spawn as dig-loop success (the adapter can spawn behind `OPC_ORCA_LIVE=1`; this gate still does not)
+- A GitHub write after a live spawn. The loop may store a parsed live result. It still stops at `awaiting_human_pr`, and this package does not open, update, or merge.
 - `gh pr create`, `gh pr edit`, `git push`, `gh pr merge`
 - Auto-merge, merge queue, required `merge-gate`
 - A reviewer login list that grants merge rights (the policy file is empty on purpose)

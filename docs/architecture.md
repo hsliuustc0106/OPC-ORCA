@@ -1,6 +1,6 @@
 # Architecture
 
-OPC-ORCA is a desktop-first dig loop. DeepSeek Harness is where a person talks. Orca is where a run, a task, and a worker live. The coordinator is the state machine between them. v0 ships the boundaries and the stubs, not a live backend.
+OPC-ORCA is a desktop-first dig loop. DeepSeek Harness is where a person talks. Orca is where a run, a task, and a worker live. The coordinator is the state machine between them. Dry-run is the default. Live spawn is opt-in and fail-closed. The loop stops at the human PR gate.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -11,14 +11,14 @@ OPC-ORCA is a desktop-first dig loop. DeepSeek Harness is where a person talks. 
                      │ DSH plugin API
 ┌────────────────────▼─────────────────────────┐
 │ plugins/opc-orca          @opc-orca/plugin   │
-│   v0: load, log, register nothing            │
+│   dig tool: goal in, status summary out      │
 └────────────────────┬─────────────────────────┘
-                     │ later: start a dig
+                     │ start a dig
 ┌────────────────────▼─────────────────────────┐
 │ packages/coordinator                         │
 │   intake → … → awaiting_human_pr → done      │
 │   easy task: coordinator-direct              │
-│   other task: dry-run plan via the adapter   │
+│   other task: dry-run plan, or a parsed live │
 └────────────────────┬─────────────────────────┘
                      │ dry-run plan, or a flagged live spawn
 ┌────────────────────▼─────────────────────────┐
@@ -41,7 +41,7 @@ The UI is not a second orchestrator. It does not merge pull requests and it does
 
 ## opc-orca plugin
 
-`plugins/opc-orca` is a DSH plugin stub. `apply` returns a disposer and registers no tools, routes, or send middleware. A later version will call the coordinator. It still will not open, update, or merge a pull request; that yes stays with the human ([autonomous development](autonomous-dev.md)).
+`plugins/opc-orca` is the DSH plugin. `apply` injects the `tools` service and registers one tool, `dig`. A goal goes in. The coordinator runs. A status summary comes out. Live mode is on only when the call or plugin config sets `live: true`, or when `OPC_ORCA_LIVE` is exactly `1`. `live: false` forces dry-run. The default is dry-run. The tool stops before `askHumanPr`, so it does not enter `awaiting_human_pr` and it does not open, update, or merge a pull request. That yes stays with the human ([autonomous development](autonomous-dev.md)). It registers no routes and no send middleware.
 
 ## orca-adapter
 
@@ -72,11 +72,11 @@ Fail-closed, in order:
 - non-zero exit or a signal → `spawn-failed` (stdout is not turned into a success)
 - unparseable stdout → `unparseable` (no partial id is returned)
 
-The coordinator stores only dry-run plans. A throw, and a live result that is not a dry-run plan, leave the dig state where it was. A live spawn does not move `awaiting_human_pr`. This phase does not run the real Orca desktop. Orca `gate-create` and `gate-resolve` are backend gates for a worker or task decision. They are separate from the GitHub human PR gate. `reply` is separate from that gate too.
+The coordinator stores a dry-run plan as recorded. It stores a live result only after a successful parse, and that parse is what advances state: run id, task id, and worker id are copied from stdout and passed into the next call. `status` stores the parsed status token. `check` stores stdout `converged` and does not copy the caller flag. A throw (`not-configured`, `not-implemented`, `spawn-failed`, `unparseable`, or a live object that is not a parsed success) leaves the state where it was and stores no intent for that call. `bindRun` stores neither intent if the second call throws. A parsed live result does not move `awaiting_human_pr` by itself. This phase does not run the real Orca desktop and does not confirm CLI flag names. Orca `gate-create` and `gate-resolve` are backend gates for a worker or task decision. They are separate from the GitHub human PR gate. `reply` is separate from that gate too.
 
 ## Coordinator
 
-`packages/coordinator` owns the dig-loop states. Normal tasks call the adapter in dry-run and record that plan (`run-create`, `task-create`, `worker-start` for **dsh** in a **new-child** worktree, then `check` on the waiting loop). While `waiting`, the loop may also record `status`, `task-list`, `worker-show`, `reply`, `gate-create`, and `gate-resolve`. Observation, reply, and backend gates do not converge and are not a substitute for `check`. Reply and the backend gates do not move `awaiting_human_pr`. After `converging`, the Orca worker path may record `worker-release`. The default adapter is dry-run and does not spawn. `WIRE_ADAPTER_TODO` records the boundary that remains: a thrown adapter error, including a live spawn that fails closed (`not-configured`, `spawn-failed`, `unparseable`), is failure, not a converged tip, not a successful observation, not a worker answer, not a released worker, and not a resolved backend gate. A parsed live result is not a dry-run plan, so the loop does not store it and does not advance. The easy-task path skips worker dispatch.
+`packages/coordinator` owns the dig-loop states. Normal tasks call the adapter and record the result (`run-create`, `task-create`, `worker-start` for **dsh** in a **new-child** worktree, then `check` on the waiting loop). The default adapter is dry-run and does not spawn, even when `OPC_ORCA_LIVE=1`. A live adapter is used only when the caller builds one (`live: true` or `OPC_ORCA_LIVE=1`). While `waiting`, the loop may also record `status`, `task-list`, `worker-show`, `reply`, `gate-create`, and `gate-resolve`. Observation, reply, and backend gates do not converge and are not a substitute for `check`. Reply and the backend gates do not move `awaiting_human_pr`. After `converging`, the Orca worker path may record `worker-release`. `WIRE_ADAPTER_TODO` records the boundary that remains: a thrown adapter error, including a live spawn that fails closed (`not-configured`, `spawn-failed`, `unparseable`), is failure, not a converged tip, not a successful observation, not a worker answer, not a released worker, and not a resolved backend gate. A parsed live result is stored and advances the same states. The loop still stops at `awaiting_human_pr`. The easy-task path skips worker dispatch.
 
 States: `intake`, `triage`, `plan`, `run_bound`, `dispatched`, `waiting`, `converging`, `awaiting_human_pr`, `done`.
 
@@ -90,7 +90,7 @@ An **easy** task never reaches that path. The coordinator does the work in its o
 
 ## What is intentionally absent
 
-- Treating a live `orca` / `orca-ide` id as dig-loop success (spawn is flag-gated in the adapter; the loop still stores only dry-run plans)
+- Confirming CLI flag names against the desktop CLI (a later phase)
 - A smoke run against the real Orca desktop (a later phase)
 - Pull-request create, edit, push, or merge
 - Merge queue, auto-merge, and `merge_group` workflows

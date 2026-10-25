@@ -1,6 +1,6 @@
 # Coordinator workflow
 
-The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, `worker-start`, and `check`, and store that plan as intents. While `waiting`, they may also record `status`, `task-list`, `worker-show`, `reply`, `gate-create`, and `gate-resolve`. Those plans do not converge. `reply` is a worker-side answer and is not the human PR yes. `gate-create` and `gate-resolve` are Orca backend gates for a worker or task decision. They are not the human PR yes and do not move `awaiting_human_pr`. After `converging`, the Orca worker path may record `worker-release`. Dry-run does not spawn and does not need the `orca` binary, even when `OPC_ORCA_LIVE=1`. Without that variable (and without the adapter `live` option), a call throws `not-configured` or `not-implemented`. With the flag, the adapter spawns `orca` (Linux: `orca-ide`) and parses stdout. A missing binary, a non-zero exit, or unparseable stdout throws. The loop does not invent a run id, a worker id, a message id, a gate id, a status payload, or an exit code, and it does not treat that throw or a live result as converged. The loop still stores only dry-run plans.
+The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` for `run-create`, `task-create`, `worker-start`, and `check`, and store that result as intents. The default is **dry-run**. While `waiting`, they may also record `status`, `task-list`, `worker-show`, `reply`, `gate-create`, and `gate-resolve`. Those calls do not converge. `reply` is a worker-side answer and is not the human PR yes. `gate-create` and `gate-resolve` are Orca backend gates for a worker or task decision. They are not the human PR yes and do not move `awaiting_human_pr`. After `converging`, the Orca worker path may record `worker-release`. Dry-run does not spawn and does not need the `orca` binary, even when `OPC_ORCA_LIVE=1`. Without that variable (and without the adapter `live` option), a call throws `not-configured` or `not-implemented`. With the flag, the adapter spawns `orca` (Linux: `orca-ide`) and parses stdout. A missing binary, a non-zero exit, or unparseable stdout throws. The loop does not invent a run id, a worker id, a message id, a gate id, a status payload, or an exit code, and it does not treat that throw as converged. A parsed live result is stored and advances the same states. The loop still stops at `awaiting_human_pr`.
 
 ```
 intake
@@ -38,39 +38,41 @@ Decide whether the goal is ready to dig.
 
 ### 4. Run-create and task-create (`run_bound`)
 
-The coordinator calls the adapter with `dryRun`. The recorded plan is:
+The coordinator calls the adapter. A dry-run plan is:
 
-- `run-create` — goal, repo, base `origin/main`
-- `task-create` — worker `dsh`, worktree `new-child`
+- `run-create` — goal, repo, base `origin/main`, and no run id
+- `task-create` — worker `dsh`, worktree `new-child`, and no task id
 
-`run_bound` means an Orca run is the *intended* parent of the task. There is still no run id on a dry-run plan. Dry-run must not invent one. If the adapter throws, the state stays `plan` and no intent is stored. A live result that is not a dry-run plan is refused the same way: the state stays `plan` and no intent is stored.
+A parsed live result stores the run id from `run-create` and the task id from `task-create`. The loop passes that run id into `task-create`. It does not invent one.
+
+`run_bound` means an Orca run is the parent of the task. On a dry-run plan there is still no run id. If either call throws, the state stays `plan` and neither intent is stored.
 
 ### 5. Worker-start (`dispatched`)
 
-The coordinator calls the adapter's `worker-start` in dry-run with worker `dsh` and worktree `new-child`. No task id is invented. A throw leaves the state at `run_bound`.
+The coordinator calls the adapter's `worker-start` with worker `dsh` and worktree `new-child`. A dry-run plan invents no task id. A parsed live result is called with the task id from `task-create` and stores the worker id from stdout. A throw leaves the state at `run_bound`.
 
 The child worktree is new for this task. It is not the coordinator’s checkout and not a worktree left over from another run.
 
 ### 6. Check loop (`waiting`)
 
-The coordinator calls the adapter’s `check` in dry-run and stores that plan as the `check` intent. The plan is the caller’s `converged` flag. It has no run id. A throw leaves the state where it was (`dispatched` or `waiting`) and stores no check intent.
+The coordinator calls the adapter’s `check` and stores that result as the `check` intent. A dry-run plan is the caller’s `converged` flag and has no run id. A parsed live result is stdout `converged` and is called with the run id from `run-create`. The caller flag is not copied onto a live result. A throw leaves the state where it was (`dispatched` or `waiting`) and stores no check intent.
 
 - Not converged: stay in `waiting`. The first successful check may enter `waiting` from `dispatched`.
 - Converged: go to `converging`.
 
-Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself in v0; the caller passes `converged: true` or `false`, and dry-run records that flag. A thrown adapter error (`not-configured`, `not-implemented`, `spawn-failed`, or `unparseable`) is failure, not converged. A live result is not stored as a converged check.
+Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself. In dry-run the caller passes `converged: true` or `false`, and the plan must record that flag. In a live check, stdout decides. A thrown adapter error (`not-configured`, `not-implemented`, `spawn-failed`, or `unparseable`) is failure, not converged.
 
-While the state is `waiting`, the coordinator may call `status`, `task-list`, and `worker-show` in dry-run. Each recorded plan is the command only: no run id, task id, worker id, or status payload. The state stays `waiting`. These calls are not convergence and are not a substitute for `check`. A throw leaves the state on `waiting` and does not store that call’s intent. Calling them before `waiting`, or after `check` has entered `converging`, is an illegal transition.
+While the state is `waiting`, the coordinator may call `status`, `task-list`, and `worker-show`. A dry-run plan is the command only: no run id, task id, worker id, or status payload. A parsed live `status` stores the status token. A parsed live `task-list` stores the tasks token and is called with the run id. A parsed live `worker-show` stores the worker id and is called with the worker id from `worker-start`. The state stays `waiting`. These calls are not convergence and are not a substitute for `check`. A throw leaves the state on `waiting` and does not store that call’s intent. Calling them before `waiting`, or after `check` has entered `converging`, is an illegal transition.
 
-While the state is `waiting`, the coordinator may also call `reply` in dry-run to answer a worker ask. The plan records the answer text and no run id, message id, or exit code. The state stays `waiting`. Reply does not enter `converging` and does not enter `awaiting_human_pr`. It is not the human PR yes and it is not a substitute for `check`. A throw (`not-configured`, `not-implemented`, `spawn-failed`, or `unparseable`) leaves the state on `waiting` and stores no reply intent. Calling reply before `waiting`, or after the state has left `waiting`, is an illegal transition.
+While the state is `waiting`, the coordinator may also call `reply` to answer a worker ask. A dry-run plan records the answer text and no run id, message id, or exit code. A parsed live result records the message id from stdout and is called with the run id. The state stays `waiting`. Reply does not enter `converging` and does not enter `awaiting_human_pr`. It is not the human PR yes and it is not a substitute for `check`. A throw (`not-configured`, `not-implemented`, `spawn-failed`, or `unparseable`) leaves the state on `waiting` and stores no reply intent. Calling reply before `waiting`, or after the state has left `waiting`, is an illegal transition.
 
-While the state is `waiting`, the coordinator may call `gate-create` and `gate-resolve` in dry-run. These are Orca backend gates for a worker or task decision. `gate-create` records the reason and no run id or gate id. `gate-resolve` records the resolution and no gate id or exit code. The state stays `waiting`. Neither call enters `converging` or `awaiting_human_pr`. Neither call is the human PR yes, and neither opens, updates, or merges a pull request. A throw (`not-configured`, `not-implemented`, `spawn-failed`, or `unparseable`) leaves the state on `waiting` and stores no intent for that call. Calling either command before `waiting`, or after the state has left `waiting`, is an illegal transition. The coordinator-direct path never reaches `waiting`, so it does not record these gates.
+While the state is `waiting`, the coordinator may call `gate-create` and `gate-resolve`. These are Orca backend gates for a worker or task decision. A dry-run `gate-create` records the reason and no run id or gate id. A dry-run `gate-resolve` records the resolution and no gate id or exit code. A parsed live result records the gate id from stdout. `gate-create` is called with the run id. `gate-resolve` is called with the gate id from `gate-create`, not with an id the loop invented. The state stays `waiting`. Neither call enters `converging` or `awaiting_human_pr`. Neither call is the human PR yes, and neither opens, updates, or merges a pull request. A throw (`not-configured`, `not-implemented`, `spawn-failed`, or `unparseable`) leaves the state on `waiting` and stores no intent for that call. Calling either command before `waiting`, or after the state has left `waiting`, is an illegal transition. The coordinator-direct path never reaches `waiting`, so it does not record these gates.
 
 ### 7. Converge (`converging`)
 
 Both paths meet here. The loop is not done. It still needs one verdict and a human.
 
-On the Orca worker path the coordinator may call `worker-release` in dry-run once the state is `converging` (the worker is done with its tip). The plan is the command only: no worker id. The state stays `converging`. Release does not ask the human and does not open, update, or merge a pull request. A throw leaves the state on `converging` and stores no worker-release intent. The coordinator-direct path has no worker, so `worker-release` there is an illegal transition. Calling it before `converging`, or after the state has left `converging`, is an illegal transition.
+On the Orca worker path the coordinator may call `worker-release` once the state is `converging` (the worker is done with its tip). A dry-run plan is the command only: no worker id. A parsed live result stores the worker id from stdout and is called with the worker id from `worker-start`. The state stays `converging`. Release does not ask the human and does not open, update, or merge a pull request. A throw leaves the state on `converging` and stores no worker-release intent. The coordinator-direct path has no worker, so `worker-release` there is an illegal transition. Calling it before `converging`, or after the state has left `converging`, is an illegal transition.
 
 ### 8. PR ask (`awaiting_human_pr`)
 
@@ -103,4 +105,4 @@ Normal means Orca owns execution. The path is `plan` → `run_bound` → `dispat
 
 ## Backend gates are not the human PR yes
 
-`gate-create` and `gate-resolve` run while `waiting`. They record an Orca decision for the worker or task. `gate-resolve` must not be used as a stand-in for the human PR yes, and neither call moves `awaiting_human_pr`. `reply` must not either: it answers a worker while `waiting` and does not move `awaiting_human_pr`. `status`, `task-list`, and `worker-show` are observation while `waiting`. They do not stand in for `check`. A flagged live spawn that throws, or that returns a live result, does not move this loop. The coordinator’s default adapter stays on dry-run.
+`gate-create` and `gate-resolve` run while `waiting`. They record an Orca decision for the worker or task. `gate-resolve` must not be used as a stand-in for the human PR yes, and neither call moves `awaiting_human_pr`. `reply` must not either: it answers a worker while `waiting` and does not move `awaiting_human_pr`. `status`, `task-list`, and `worker-show` are observation while `waiting`. They do not stand in for `check`. A flagged live spawn that throws does not move this loop. A parsed live result advances the same states and still does not move `awaiting_human_pr` by itself. The coordinator’s default adapter stays on dry-run. The Harness `dig` tool uses that default unless `live: true` or `OPC_ORCA_LIVE=1`.

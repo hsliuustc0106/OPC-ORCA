@@ -1,3 +1,5 @@
+export { runDig } from './dig.ts'
+export type { DigEnv, DigRequest, DigSummary } from './dig.ts'
 export { DuplicateVerdictError, IllegalTransitionError, InvalidVerdictError } from './errors.ts'
 export { createDigLoop } from './loop.ts'
 export type { DigLoop, DigLoopOptions } from './loop.ts'

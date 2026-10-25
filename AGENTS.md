@@ -71,8 +71,8 @@ npm test
 
 ## Layout
 
-- `plugins/opc-orca/` — DSH plugin stub (`@opc-orca/plugin`). No tools.
-- `packages/coordinator/` — dig-loop state machine. Normal tasks drive the adapter in dry-run. Stops in `awaiting_human_pr`.
+- `plugins/opc-orca/` — DSH plugin (`@opc-orca/plugin`). Registers a `dig` tool. Default dry-run. Live only when `OPC_ORCA_LIVE=1` or `live: true`. Does not open, update, or merge.
+- `packages/coordinator/` — dig-loop state machine. Dry-run plans stay as recorded. A parsed live result advances the same states. Stops in `awaiting_human_pr`.
 - `packages/orca-adapter/` — typed Orca CLI surface. Dry-run records a plan and does not spawn. Live spawn of `orca` / `orca-ide` is flag-gated (`OPC_ORCA_LIVE=1` or `live: true`) and fail-closed. Otherwise throws `not-configured` or refuses to spawn.
 - `docs/` — architecture, the human gate, the coordinator steps.
 - `.github/workflows/test.yml` — the check that should stay green.

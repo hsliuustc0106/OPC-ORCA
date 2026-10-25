@@ -1,4 +1,11 @@
-import { createOrcaAdapter, type OrcaAdapter, type OrcaCallResult, type PlannedOrcaCall } from '@opc-orca/orca-adapter'
+import {
+  createOrcaAdapter,
+  type LiveOrcaCall,
+  type LiveOrcaIds,
+  type OrcaAdapter,
+  type OrcaCallResult,
+  type PlannedOrcaCall,
+} from '@opc-orca/orca-adapter'
 
 import { DuplicateVerdictError, IllegalTransitionError, InvalidVerdictError } from './errors.ts'
 import {
@@ -22,28 +29,35 @@ export interface DigLoop {
   runDirect(): void
   /**
    * Normal tasks only. Calls the adapter for `run-create` and `task-create`.
-   * State guards throw before the promise. A dry-run plan is stored only
-   * after both calls resolve. A live rejection leaves the state on `plan`.
+   * State guards throw before the promise. Both results are stored only
+   * after both calls resolve. A dry-run plan is stored as recorded. A parsed
+   * live result stores the run id and task id from stdout and passes that
+   * run id into task-create. A throw leaves the state on `plan` and stores
+   * neither intent.
    */
   bindRun(): Promise<void>
   /**
    * Calls the adapter for `worker-start` (dsh, new-child). The default adapter
-   * does not spawn. A rejection leaves the state on `run_bound`. A live
-   * result is not a dry-run plan and does not move state.
+   * does not spawn. A dry-run plan has no task id. A parsed live result
+   * stores the worker id and is called with the task id from task-create.
+   * A rejection leaves the state on `run_bound`.
    */
   startWorker(): Promise<void>
   /**
    * Waiting-loop check. Calls the adapter's `check`. A dry-run plan is stored
-   * only after the call resolves; that plan's converged flag picks `waiting`
-   * or `converging`. A rejection leaves the state on `dispatched` or `waiting`
-   * and is not a converged tip. Does not invent a run id.
+   * only after the call resolves; that plan's converged flag must match the
+   * caller and picks `waiting` or `converging`. A parsed live result stores
+   * stdout `converged` (the caller flag is not copied) and picks the same
+   * states. A rejection leaves the state on `dispatched` or `waiting` and
+   * is not a converged tip. Does not invent a run id.
    */
   check(result: { converged: boolean }): Promise<void>
   /**
-   * Observation while `waiting`. Calls the adapter's `status` in dry-run and
-   * records that plan. Does not change state. Not a check and not convergence.
-   * A rejection leaves the state on `waiting` and stores no status intent.
-   * Does not invent a run id or a status payload.
+   * Observation while `waiting`. Records the adapter result and does not
+   * change state. A dry-run plan is the command only. A parsed live result
+   * stores the status token. Not a check and not convergence. A rejection
+   * leaves the state on `waiting` and stores no status intent. Does not
+   * invent a run id or a status payload.
    */
   status(): Promise<void>
   /**
@@ -57,11 +71,12 @@ export interface DigLoop {
    */
   workerShow(): Promise<void>
   /**
-   * Answer a worker ask while `waiting`. Calls the adapter's `reply` in
-   * dry-run and records the answer text. Does not change state. Not a check,
-   * not convergence, and not the human PR yes: it must not enter
-   * `awaiting_human_pr`. A rejection leaves the state on `waiting` and
-   * stores no reply intent. Does not invent a run id or a message id.
+   * Answer a worker ask while `waiting`. A dry-run plan records the answer
+   * text and no id. A parsed live result records the message id from stdout.
+   * Does not change state. Not a check, not convergence, and not the human
+   * PR yes: it must not enter `awaiting_human_pr`. A rejection leaves the
+   * state on `waiting` and stores no reply intent. Does not invent a run id
+   * or a message id.
    */
   reply(input: { text: string }): Promise<void>
   /**
@@ -83,10 +98,11 @@ export interface DigLoop {
   gateResolve(input: { resolution: string }): Promise<void>
   /**
    * After `converging` on the Orca worker path (the worker is done with its
-   * tip). Calls the adapter's `worker-release` in dry-run and records that
-   * plan. Does not change state and does not open a pull request. A
-   * rejection leaves the state on `converging` and stores no release intent.
-   * Does not invent a worker id. The coordinator-direct path has no worker.
+   * tip). A dry-run plan is the command only. A parsed live result stores
+   * the worker id from stdout. Does not change state and does not open a
+   * pull request. A rejection leaves the state on `converging` and stores
+   * no release intent. Does not invent a worker id. The coordinator-direct
+   * path has no worker.
    */
   workerRelease(): Promise<void>
   /** Stop for a human. Requires one verdict for `sha`. Does not open a pull request. */
@@ -125,13 +141,14 @@ export interface DigLoopOptions {
    * after converging. Default: dry-run, no binary required, even if
    * `OPC_ORCA_LIVE=1` is set in the process environment. A live failure
    * (`not-configured`, `not-implemented`, `spawn-failed`, `unparseable`)
-   * rejects. The loop does not invent a run id or a gate id from that
-   * rejection, and it does not store a live result: only a dry-run plan
-   * moves state. A rejected check is not converged. A rejected observation
-   * is not a successful read. A rejected reply is not an answer and is not
-   * the human PR yes. A rejected gate is not a created or resolved backend
-   * gate and is not the human PR yes. A rejected worker-release is not a
-   * released worker.
+   * rejects and does not advance state. A parsed live result stores the
+   * ids, status, and converged flag from that result and advances the same
+   * states as a dry-run plan. The loop does not invent a run id or a gate
+   * id. A rejected check is not converged. A rejected observation is not a
+   * successful read. A rejected reply is not an answer and is not the human
+   * PR yes. A rejected gate is not a created or resolved backend gate and
+   * is not the human PR yes. A rejected worker-release is not a released
+   * worker. Nothing here moves `awaiting_human_pr` except `askHumanPr`.
    */
   adapter?: OrcaAdapter
   /** Repository passed to run-create. Required before `bindRun`. */
@@ -144,7 +161,7 @@ function toIntent(call: PlannedOrcaCall): Intent {
   return { command: call.command, args: { ...call.args } }
 }
 
-/** A dry-run plan is the only adapter result this loop may store. A live result is refused. */
+/** A dry-run plan must match the command and must not carry an Orca id. */
 function requireDryPlan(call: OrcaCallResult, command: PlannedOrcaCall['command']): asserts call is PlannedOrcaCall {
   if (call.dryRun !== true || call.command !== command) {
     throw new TypeError('refusing to treat an Orca result as success')
@@ -202,6 +219,78 @@ function requireDryPlan(call: OrcaCallResult, command: PlannedOrcaCall['command'
   }
 }
 
+const LIVE_ID_KEYS = ['runId', 'taskId', 'workerId', 'messageId', 'gateId'] as const
+
+type Accepted =
+  | { kind: 'dry'; intent: Intent }
+  | { kind: 'live'; intent: Intent; ids: LiveOrcaIds; converged: 'true' | 'false' | null }
+
+function liveId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length === 0 || value !== value.trim()) {
+    throw new TypeError('refusing to treat an Orca result as success')
+  }
+  return value
+}
+
+/**
+ * A live result is stored only when the adapter already parsed it
+ * (`live`, exit 0, required field present). Ids are copied from that
+ * object. A missing field throws and the caller must not advance.
+ */
+function acceptLive(call: LiveOrcaCall, command: PlannedOrcaCall['command']): Accepted {
+  if (call.live !== true || call.exitCode !== 0 || call.fields === undefined) {
+    throw new TypeError('refusing to treat an Orca result as success')
+  }
+  const ids: LiveOrcaIds = {}
+  const args: Record<string, string> = {}
+  for (const key of LIVE_ID_KEYS) {
+    const value = liveId(call.ids?.[key])
+    if (value === undefined) continue
+    ids[key] = value
+    args[key] = value
+  }
+  let converged: 'true' | 'false' | null = null
+  if (command === 'run-create') {
+    if (ids.runId === undefined) throw new TypeError('live run-create result is missing runId')
+  } else if (command === 'task-create') {
+    if (ids.taskId === undefined) throw new TypeError('live task-create result is missing taskId')
+  } else if (command === 'worker-start' || command === 'worker-show' || command === 'worker-release') {
+    if (ids.workerId === undefined) throw new TypeError('live worker result is missing workerId')
+  } else if (command === 'check') {
+    const value = call.fields.converged
+    if (value !== 'true' && value !== 'false') throw new TypeError('live check result is missing converged')
+    args.converged = value
+    converged = value
+  } else if (command === 'status') {
+    const value = call.fields.status
+    if (typeof value !== 'string' || value.length === 0) throw new TypeError('live status result is missing status')
+    args.status = value
+  } else if (command === 'task-list') {
+    const value = call.fields.tasks
+    if (typeof value !== 'string' || value.length === 0) throw new TypeError('live task-list result is missing tasks')
+    args.tasks = value
+  } else if (command === 'reply') {
+    if (ids.messageId === undefined) throw new TypeError('live reply result is missing messageId')
+  } else if (command === 'gate-create' || command === 'gate-resolve') {
+    if (ids.gateId === undefined) throw new TypeError('live gate result is missing gateId')
+  }
+  return { kind: 'live', intent: { command, args }, ids, converged }
+}
+
+/** Dry-run plans stay as recorded. A parsed live result is accepted. Anything else throws. */
+function acceptResult(call: OrcaCallResult, command: PlannedOrcaCall['command']): Accepted {
+  if (call.command !== command) throw new TypeError('refusing to treat an Orca result as success')
+  if (call.dryRun === true) {
+    requireDryPlan(call, command)
+    return { kind: 'dry', intent: toIntent(call) }
+  }
+  if (call.dryRun !== false || call.live !== true) {
+    throw new TypeError('refusing to treat an Orca result as success')
+  }
+  return acceptLive(call, command)
+}
+
 export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
   const adapter = options.adapter ?? createOrcaAdapter({ dryRun: true })
   const repo = options.repo?.trim() ?? ''
@@ -215,6 +304,15 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
   let humanDecision: HumanDecision | null = null
   let stopReason: string | null = null
   let adapterBusy = false
+  /** Ids copied from parsed live results. Dry-run never fills these. */
+  const bound: { runId?: string; taskId?: string; workerId?: string; gateId?: string } = {}
+
+  const remember = (ids: LiveOrcaIds): void => {
+    if (ids.runId !== undefined) bound.runId = ids.runId
+    if (ids.taskId !== undefined) bound.taskId = ids.taskId
+    if (ids.workerId !== undefined) bound.workerId = ids.workerId
+    if (ids.gateId !== undefined) bound.gateId = ids.gateId
+  }
 
   const need = (expected: readonly DigState[], action: string): void => {
     if (!expected.includes(state)) throw new IllegalTransitionError(state, action)
@@ -246,8 +344,9 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
     return (async () => {
       try {
         const observed = await call()
-        requireDryPlan(observed, command)
-        intents.push(toIntent(observed))
+        const accepted = acceptResult(observed, command)
+        if (accepted.kind === 'live') remember(accepted.ids)
+        intents.push(accepted.intent)
       } finally {
         adapterBusy = false
       }
@@ -303,15 +402,20 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       return (async () => {
         try {
           const run = await adapter.runCreate({ goal: goalText, repo, baseRef: 'origin/main' })
-          requireDryPlan(run, 'run-create')
+          const runAccepted = acceptResult(run, 'run-create')
           const task = await adapter.taskCreate({
             title: goalText,
             worker: DEFAULT_WORKER,
             worktree: DEFAULT_WORKTREE,
+            ...(runAccepted.kind === 'live' && runAccepted.ids.runId !== undefined
+              ? { runId: runAccepted.ids.runId }
+              : {}),
           })
-          requireDryPlan(task, 'task-create')
+          const taskAccepted = acceptResult(task, 'task-create')
+          if (runAccepted.kind === 'live') remember(runAccepted.ids)
+          if (taskAccepted.kind === 'live') remember(taskAccepted.ids)
           path = 'orca-worker'
-          intents.push(toIntent(run), toIntent(task))
+          intents.push(runAccepted.intent, taskAccepted.intent)
           state = 'run_bound'
         } finally {
           adapterBusy = false
@@ -329,9 +433,11 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
           const started = await adapter.workerStart({
             worker: DEFAULT_WORKER,
             worktree: DEFAULT_WORKTREE,
+            ...(bound.taskId !== undefined ? { taskId: bound.taskId } : {}),
           })
-          requireDryPlan(started, 'worker-start')
-          intents.push(toIntent(started))
+          const accepted = acceptResult(started, 'worker-start')
+          if (accepted.kind === 'live') remember(accepted.ids)
+          intents.push(accepted.intent)
           state = 'dispatched'
         } finally {
           adapterBusy = false
@@ -348,13 +454,25 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       adapterBusy = true
       return (async () => {
         try {
-          const checked = await adapter.check({ converged: result.converged })
-          requireDryPlan(checked, 'check')
-          if (checked.args.converged !== flag) {
-            throw new TypeError('dry-run check plan must record the caller converged flag')
+          const checked = await adapter.check({
+            converged: result.converged,
+            ...(bound.runId !== undefined ? { runId: bound.runId } : {}),
+          })
+          const accepted = acceptResult(checked, 'check')
+          if (accepted.kind === 'dry') {
+            if (checked.dryRun !== true || checked.args.converged !== flag) {
+              throw new TypeError('dry-run check plan must record the caller converged flag')
+            }
+            intents.push(accepted.intent)
+            state = checked.args.converged === 'true' ? 'converging' : 'waiting'
+            return
           }
-          intents.push(toIntent(checked))
-          state = checked.args.converged === 'true' ? 'converging' : 'waiting'
+          if (accepted.converged !== 'true' && accepted.converged !== 'false') {
+            throw new TypeError('live check result is missing converged')
+          }
+          remember(accepted.ids)
+          intents.push(accepted.intent)
+          state = accepted.converged === 'true' ? 'converging' : 'waiting'
         } finally {
           adapterBusy = false
         }
@@ -364,10 +482,14 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       return observe('status', 'read status', () => adapter.status())
     },
     taskList() {
-      return observe('task-list', 'list tasks', () => adapter.taskList())
+      return observe('task-list', 'list tasks', () =>
+        bound.runId !== undefined ? adapter.taskList({ runId: bound.runId }) : adapter.taskList(),
+      )
     },
     workerShow() {
-      return observe('worker-show', 'show a worker', () => adapter.workerShow())
+      return observe('worker-show', 'show a worker', () =>
+        bound.workerId !== undefined ? adapter.workerShow({ workerId: bound.workerId }) : adapter.workerShow(),
+      )
     },
     reply(input) {
       need(['waiting'], 'reply to a worker')
@@ -381,12 +503,19 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       adapterBusy = true
       return (async () => {
         try {
-          const answered = await adapter.reply({ text })
-          requireDryPlan(answered, 'reply')
-          if (answered.args.text !== text) {
-            throw new TypeError('dry-run reply plan must record the answer text')
+          const answered = await adapter.reply({
+            text,
+            ...(bound.runId !== undefined ? { runId: bound.runId } : {}),
+          })
+          const accepted = acceptResult(answered, 'reply')
+          if (accepted.kind === 'dry') {
+            if (answered.dryRun !== true || answered.args.text !== text) {
+              throw new TypeError('dry-run reply plan must record the answer text')
+            }
+          } else {
+            remember(accepted.ids)
           }
-          intents.push(toIntent(answered))
+          intents.push(accepted.intent)
           // State stays waiting. Reply is a worker answer, not the human PR yes.
         } finally {
           adapterBusy = false
@@ -405,12 +534,19 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       adapterBusy = true
       return (async () => {
         try {
-          const created = await adapter.gateCreate({ reason })
-          requireDryPlan(created, 'gate-create')
-          if (created.args.reason !== reason) {
-            throw new TypeError('dry-run gate-create plan must record the reason')
+          const created = await adapter.gateCreate({
+            reason,
+            ...(bound.runId !== undefined ? { runId: bound.runId } : {}),
+          })
+          const accepted = acceptResult(created, 'gate-create')
+          if (accepted.kind === 'dry') {
+            if (created.dryRun !== true || created.args.reason !== reason) {
+              throw new TypeError('dry-run gate-create plan must record the reason')
+            }
+          } else {
+            remember(accepted.ids)
           }
-          intents.push(toIntent(created))
+          intents.push(accepted.intent)
           // State stays waiting. A backend gate is not the human PR yes.
         } finally {
           adapterBusy = false
@@ -429,12 +565,19 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       adapterBusy = true
       return (async () => {
         try {
-          const resolved = await adapter.gateResolve({ resolution })
-          requireDryPlan(resolved, 'gate-resolve')
-          if (resolved.args.resolution !== resolution) {
-            throw new TypeError('dry-run gate-resolve plan must record the resolution')
+          const resolved = await adapter.gateResolve({
+            resolution,
+            ...(bound.gateId !== undefined ? { gateId: bound.gateId } : {}),
+          })
+          const accepted = acceptResult(resolved, 'gate-resolve')
+          if (accepted.kind === 'dry') {
+            if (resolved.dryRun !== true || resolved.args.resolution !== resolution) {
+              throw new TypeError('dry-run gate-resolve plan must record the resolution')
+            }
+          } else {
+            remember(accepted.ids)
           }
-          intents.push(toIntent(resolved))
+          intents.push(accepted.intent)
           // State stays waiting. Resolving a backend gate is not the human PR yes.
         } finally {
           adapterBusy = false
@@ -452,9 +595,12 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       adapterBusy = true
       return (async () => {
         try {
-          const released = await adapter.workerRelease()
-          requireDryPlan(released, 'worker-release')
-          intents.push(toIntent(released))
+          const released = await adapter.workerRelease(
+            bound.workerId !== undefined ? { workerId: bound.workerId } : {},
+          )
+          const accepted = acceptResult(released, 'worker-release')
+          if (accepted.kind === 'live') remember(accepted.ids)
+          intents.push(accepted.intent)
           // State stays converging. Release is not an ask to open, update, or merge.
         } finally {
           adapterBusy = false
