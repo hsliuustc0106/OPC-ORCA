@@ -80,6 +80,27 @@ export interface WorkerShowInput {
   workerId?: string
 }
 
+export interface WorkerReleaseInput {
+  /**
+   * Live calls require this. Dry-run does not take a worker id and does not
+   * invent one. A supplied id is ignored, not returned.
+   */
+  workerId?: string
+}
+
+export interface ReplyInput {
+  /**
+   * Live calls require this. Dry-run does not: there is no run yet, and the
+   * plan must not invent one. A supplied id is ignored, not returned.
+   */
+  runId?: string
+  /**
+   * Dry-run records this text. It is the planned worker answer, not a
+   * message id and not the human PR yes.
+   */
+  text: string
+}
+
 /** Commands a dry-run records. Other commands still reject. */
 export type PlannedOrcaCommand =
   | 'run-create'
@@ -89,10 +110,12 @@ export type PlannedOrcaCommand =
   | 'status'
   | 'task-list'
   | 'worker-show'
+  | 'worker-release'
+  | 'reply'
 
 /**
  * A plan, not a live Orca result. `dryRun` is always true. There is no run
- * id, task id, worker id, exit code, or status payload on this object.
+ * id, task id, worker id, message id, exit code, or status payload on this object.
  */
 export interface PlannedOrcaCall {
   readonly dryRun: true
@@ -105,7 +128,7 @@ export interface OrcaAdapter {
   readonly executable: string | null
   /** True only when this adapter was created with `dryRun`. */
   readonly dryRun: boolean
-  /** Plans recorded by dry-run dispatch, check, and observation. Empty when `dryRun` is false. */
+  /** Plans recorded by dry-run dispatch, check, observation, reply, and worker-release. Empty when `dryRun` is false. */
   readonly planned: readonly PlannedOrcaCall[]
   /**
    * Dry-run resolves a plan and does not require the CLI. The plan has no
@@ -133,14 +156,25 @@ export interface OrcaAdapter {
    * and never resolves a worker record.
    */
   workerShow(input?: WorkerShowInput): Promise<PlannedOrcaCall>
-  workerRelease(input: { workerId: string }): Promise<never>
+  /**
+   * Dry-run resolves a plan and does not require the CLI or a worker id.
+   * Otherwise the promise rejects with not-configured or not-implemented
+   * and never resolves a worker id.
+   */
+  workerRelease(input?: WorkerReleaseInput): Promise<PlannedOrcaCall>
   /**
    * Dry-run resolves a plan with the caller's converged flag and does not
    * require the CLI or a run id. Otherwise the promise rejects with
    * not-configured or not-implemented and never resolves a run id.
    */
   check(input: CheckInput): Promise<PlannedOrcaCall>
-  reply(input: { runId: string; text: string }): Promise<never>
+  /**
+   * Dry-run resolves a plan with the answer text and does not require the
+   * CLI or a run id. Otherwise the promise rejects with not-configured or
+   * not-implemented and never resolves a message id. This is not a human
+   * PR approval.
+   */
+  reply(input: ReplyInput): Promise<PlannedOrcaCall>
   gateCreate(input: { runId: string; reason: string }): Promise<never>
   gateResolve(input: { gateId: string; resolution: string }): Promise<never>
 }
