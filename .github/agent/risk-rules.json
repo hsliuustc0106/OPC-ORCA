@@ -1,0 +1,12 @@
+{
+  "version": 0,
+  "phase": "phase0-report-only",
+  "comment": "Phase 0 report-only placeholder. Nothing in CI reads this file to block, label, or merge. Tiers below are unset on purpose. Live merge queue and auto-merge are not enabled. Editing this file later is a policy change and still does not grant a merge.",
+  "enforced": false,
+  "tiers": {
+    "T0": { "meaning": "unset — report only", "paths": [] },
+    "T1": { "meaning": "unset — report only", "paths": [] },
+    "T2": { "meaning": "unset — report only", "paths": [] },
+    "T3": { "meaning": "unset — report only", "paths": [] }
+  }
+}

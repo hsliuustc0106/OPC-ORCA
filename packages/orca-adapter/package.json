@@ -1,0 +1,13 @@
+{
+  "name": "@opc-orca/orca-adapter",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Typed stubs for the Orca CLI. Throws until a real spawn is wired. Never reports a fake success.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

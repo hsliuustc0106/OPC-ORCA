@@ -1,0 +1,22 @@
+{
+  "name": "opc-orca",
+  "private": true,
+  "version": "0.0.0",
+  "description": "DeepSeek Harness entrance, Orca adapter, and dig-loop coordinator. v0 stubs.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run typecheck && node --experimental-strip-types --test packages/orca-adapter/test/*.test.ts packages/coordinator/test/*.test.ts plugins/opc-orca/test/*.test.js test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.0"
+  }
+}

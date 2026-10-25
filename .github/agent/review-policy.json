@@ -1,0 +1,9 @@
+{
+  "version": 0,
+  "phase": "phase0-report-only",
+  "comment": "Phase 0 report-only placeholder. A name here is not a merge right. Nothing in CI reads this file to block or merge. OPC-ORCA does not auto-merge. One Verdict per tip is for the human at awaiting_human_pr; open, update, and merge wait for a human yes.",
+  "enforced": false,
+  "reviewers": [],
+  "selfReview": [],
+  "writers": []
+}
