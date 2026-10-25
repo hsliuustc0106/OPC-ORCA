@@ -60,11 +60,13 @@ Live spawn runs only when `dryRun` is not set and either `createOrcaAdapter({ li
 With the flag off, each wrapper checks its arguments, then refuses without spawning:
 
 - no executable → error code `not-configured`
-- executable present → error code `not-implemented`, with argv `[binary, subcommand]`
+- executable present → error code `not-implemented`, with argv `[binary, orchestration, verb]` (`status` is `[binary, status]`)
 
-With the flag on, the wrapper spawns `[binary, subcommand, --flag, value, …]`. Subcommand names and flag spellings live in [`packages/orca-adapter/src/cli.ts`](../packages/orca-adapter/src/cli.ts). `orcaCliConfirmTodo()` is the checklist to confirm against the desktop CLI during the [local test](local-test.md). An unchecked line is not a contract. `check` does not pass the caller’s converged flag. Exit code 0 is returned only when the process exited 0. Ids are copied only from stdout lines. Stderr is not parsed and is not copied into the error.
+With the flag on, the wrapper spawns `[binary, orchestration, verb, --flag, value, …]` for every verb except `status`, which stays `[binary, status]`. Subcommand names and flag spellings live in [`packages/orca-adapter/src/cli.ts`](../packages/orca-adapter/src/cli.ts). They were confirmed against Orca desktop 1.4.240. `orcaCliConfirmTodo()` prints that contract. `check` does not pass the caller’s converged flag. Exit code 0 is returned only when the process exited 0. Ids are copied only from stdout lines. Stderr is not parsed and is not copied into the error.
 
-The stdout line protocol is one `key: value` per line. Blank lines are ignored. Values are tokens (`[A-Za-z0-9][A-Za-z0-9._:-]*`), except `converged`, which must be `true` or `false`. Known keys are `run-id`, `task-id`, `worker-id`, `message-id`, `gate-id`, `status`, `tasks`, and `converged`. Each command requires its own field: `run-create` requires `run-id`, `task-create` requires `task-id`, `worker-start`, `worker-show`, and `worker-release` require `worker-id`, `reply` requires `message-id`, `gate-create` and `gate-resolve` require `gate-id`, `status` requires `status`, `task-list` requires `tasks`, and `check` requires `converged`. An unknown line, a duplicate field, or a missing required field is unparseable. The adapter does not fill the gap from the caller’s arguments.
+Live flag bindings: goal text is `run-create --objective`; the task spec is `task-create --spec`; a parsed run id is `--run`; a parsed task id is `--task`; worker `dsh` is `worker-start --agent` (in-repo docs name that agent `dsh`); worktree `new-child` is `--worktree`; the worker id from stdout is `--dispatch` on show and release; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`. `run-create` does not take `--repo` or `--base`. The dry-run plan still records `goal`, `repo`, and `base` `origin/main` so the coordinator can prove that binding. Those two fields are not CLI flags. `task-create` does not take `--worker`, `--worktree`, or `--task-title`. `worker-start` does not pass `--repo` or `--base-branch`. `--json` is not passed. Live `reply` throws before spawn when no message id was supplied.
+
+The stdout line protocol is one `key: value` per line. Blank lines are ignored. Values are tokens (`[A-Za-z0-9][A-Za-z0-9._:-]*`), except `converged`, which must be `true` or `false`. Known keys are `run-id`, `task-id`, `worker-id`, `message-id`, `gate-id`, `status`, `tasks`, and `converged`. These keys are not the 1.4.240 CLI flag names. Each command requires its own field: `run-create` requires `run-id`, `task-create` requires `task-id`, `worker-start`, `worker-show`, and `worker-release` require `worker-id`, `reply` requires `message-id`, `gate-create` and `gate-resolve` require `gate-id`, `status` requires `status`, `task-list` requires `tasks`, and `check` requires `converged`. An unknown line, a duplicate field, or a missing required field is unparseable. A desktop printout that is not this protocol, including JSON, is unparseable. The adapter does not fill the gap from the caller’s arguments.
 
 Fail-closed, in order:
 
@@ -84,7 +86,7 @@ States: `intake`, `triage`, `plan`, `run_bound`, `dispatched`, `waiting`, `conve
 
 ## Workers
 
-A normal task becomes an Orca run, then a task, then a worker. The only worker v0 names is **dsh**, in a **new-child** worktree (a fresh child worktree off the fetched base, not a reuse of the coordinator’s checkout). The adapter rejects any other worker or worktree value so a stub cannot pretend a second runtime exists.
+A normal task becomes an Orca run, then a task, then a worker. The only worker v0 names is **dsh**, in a **new-child** worktree (a fresh child worktree off the fetched base, not a reuse of the coordinator’s checkout). Live `worker-start` passes that name as `--agent dsh` and `--worktree new-child`. The adapter rejects any other worker or worktree value so a stub cannot pretend a second runtime exists.
 
 An **easy** task never reaches that path. The coordinator does the work in its own checkout (`coordinator-direct`) and still stops at `awaiting_human_pr`.
 

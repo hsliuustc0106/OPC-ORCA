@@ -1,4 +1,4 @@
-export { ORCA_CLI, ORCA_COMMAND_FLAGS, orcaCliArgs, orcaCliConfirmTodo } from './cli.ts'
+export { ORCA_CLI, ORCA_COMMAND_FLAGS, orcaCliArgs, orcaCliConfirmTodo, orcaCommandHead } from './cli.ts'
 export type { OrcaFlagName } from './cli.ts'
 export { OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
 export { resolveOrcaExecutable } from './resolve.ts'

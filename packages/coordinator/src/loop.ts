@@ -37,10 +37,11 @@ export interface DigLoop {
    */
   bindRun(): Promise<void>
   /**
-   * Calls the adapter for `worker-start` (dsh, new-child). The default adapter
-   * does not spawn. A dry-run plan has no task id. A parsed live result
-   * stores the worker id and is called with the task id from task-create.
-   * A rejection leaves the state on `run_bound`.
+   * Calls the adapter for `worker-start` (agent dsh, worktree new-child).
+   * The default adapter does not spawn. A dry-run plan has no task id. A
+   * parsed live result stores the worker id and is called with the task id
+   * from task-create (`--task`) and the run id (`--run`). A rejection leaves
+   * the state on `run_bound`.
    */
   startWorker(): Promise<void>
   /**
@@ -73,18 +74,20 @@ export interface DigLoop {
   /**
    * Answer a worker ask while `waiting`. A dry-run plan records the answer
    * text and no id. A parsed live result records the message id from stdout.
-   * Does not change state. Not a check, not convergence, and not the human
-   * PR yes: it must not enter `awaiting_human_pr`. A rejection leaves the
-   * state on `waiting` and stores no reply intent. Does not invent a run id
-   * or a message id.
+   * Live argv needs the caller's message id (`--id`) and does not invent
+   * one. Does not change state. Not a check, not convergence, and not the
+   * human PR yes: it must not enter `awaiting_human_pr`. A rejection leaves
+   * the state on `waiting` and stores no reply intent. Does not invent a
+   * run id or a message id.
    */
-  reply(input: { text: string }): Promise<void>
+  reply(input: { text: string; messageId?: string }): Promise<void>
   /**
    * Open an Orca backend gate while `waiting`. Calls the adapter's
-   * `gate-create` in dry-run and records the reason. Does not change state.
-   * Not a check, not convergence, and not the human PR yes: it must not
-   * enter `awaiting_human_pr`. A rejection leaves the state on `waiting`
-   * and stores no gate-create intent. Does not invent a run id or a gate id.
+   * `gate-create` and records the reason. Live passes the task id from
+   * task-create as `--task` and the reason as `--question`. Does not change
+   * state. Not a check, not convergence, and not the human PR yes: it must
+   * not enter `awaiting_human_pr`. A rejection leaves the state on `waiting`
+   * and stores no gate-create intent. Does not invent a task id or a gate id.
    */
   gateCreate(input: { reason: string }): Promise<void>
   /**
@@ -170,8 +173,23 @@ function requireDryPlan(call: OrcaCallResult, command: PlannedOrcaCall['command'
     if (FABRICATED_ID.test(key)) throw new TypeError('refusing a fabricated Orca id')
   }
   if (command === 'run-create') {
-    if (call.args.base !== 'origin/main') {
-      throw new TypeError('dry-run run-create must record base origin/main')
+    const goal = call.args.goal
+    const repoArg = call.args.repo
+    if (
+      call.args.base !== 'origin/main' ||
+      goal === undefined ||
+      goal.trim().length === 0 ||
+      repoArg === undefined ||
+      repoArg.trim().length === 0
+    ) {
+      throw new TypeError('dry-run run-create must record goal, repo, and base origin/main')
+    }
+    return
+  }
+  if (command === 'task-create') {
+    const spec = call.args.spec
+    if (Object.keys(call.args).length !== 1 || spec === undefined || spec.trim().length === 0) {
+      throw new TypeError('dry-run task-create must record the spec and no id')
     }
     return
   }
@@ -404,9 +422,7 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
           const run = await adapter.runCreate({ goal: goalText, repo, baseRef: 'origin/main' })
           const runAccepted = acceptResult(run, 'run-create')
           const task = await adapter.taskCreate({
-            title: goalText,
-            worker: DEFAULT_WORKER,
-            worktree: DEFAULT_WORKTREE,
+            spec: goalText,
             ...(runAccepted.kind === 'live' && runAccepted.ids.runId !== undefined
               ? { runId: runAccepted.ids.runId }
               : {}),
@@ -434,6 +450,7 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
             worker: DEFAULT_WORKER,
             worktree: DEFAULT_WORKTREE,
             ...(bound.taskId !== undefined ? { taskId: bound.taskId } : {}),
+            ...(bound.runId !== undefined ? { runId: bound.runId } : {}),
           })
           const accepted = acceptResult(started, 'worker-start')
           if (accepted.kind === 'live') remember(accepted.ids)
@@ -496,6 +513,12 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
       if (typeof input?.text !== 'string' || input.text.trim().length === 0) {
         throw new TypeError('reply text is required')
       }
+      let messageId: string | undefined
+      if (input.messageId !== undefined) {
+        if (typeof input.messageId !== 'string') throw new TypeError('reply message id is empty')
+        messageId = input.messageId.trim()
+        if (messageId.length === 0) throw new TypeError('reply message id is empty')
+      }
       if (adapterBusy) {
         throw new IllegalTransitionError(state, 'reply to a worker while another adapter call is in flight')
       }
@@ -505,6 +528,7 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
         try {
           const answered = await adapter.reply({
             text,
+            ...(messageId !== undefined ? { messageId } : {}),
             ...(bound.runId !== undefined ? { runId: bound.runId } : {}),
           })
           const accepted = acceptResult(answered, 'reply')
@@ -536,7 +560,7 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
         try {
           const created = await adapter.gateCreate({
             reason,
-            ...(bound.runId !== undefined ? { runId: bound.runId } : {}),
+            ...(bound.taskId !== undefined ? { taskId: bound.taskId } : {}),
           })
           const accepted = acceptResult(created, 'gate-create')
           if (accepted.kind === 'dry') {

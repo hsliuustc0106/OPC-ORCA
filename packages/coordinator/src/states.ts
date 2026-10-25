@@ -51,6 +51,6 @@ export interface DigSnapshot {
   stopReason: string | null
 }
 
-/** Worker and worktree on normal-task dry-run plans. Live dispatch does not invent another pair. */
+/** Agent and worktree on the worker-start dry-run plan. Live passes `dsh` as `--agent`. */
 export const DEFAULT_WORKER = 'dsh'
 export const DEFAULT_WORKTREE = 'new-child'

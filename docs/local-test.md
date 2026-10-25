@@ -57,7 +57,7 @@ The script runs two goals:
 | Goal | Difficulty | What dry-run does |
 | --- | --- | --- |
 | Fix a typo in the readme | easy | Coordinator-direct. No Orca run. Summary state `converging`. |
-| Record the local smoke | normal | Planned `run-create`, `task-create` (worker `dsh`, worktree `new-child`), `worker-start`, and `check`. Summary state `waiting`. No run id. |
+| Record the local smoke | normal | Planned `run-create` (goal, repo, base `origin/main`), `task-create` (spec, no worker), `worker-start` (agent `dsh`, worktree `new-child`), and `check`. Summary state `waiting`. No run id. |
 
 It then records a fixture verdict (`Written-by: Smoke`, tip `smoke-local`) on each path. That fixture is local only. It is not a review of a real tip and it is not posted. Both paths stop at `awaiting_human_pr`. `githubWritePerformed` stays false. The script does not call the human yes for open, update, or merge.
 
@@ -78,7 +78,7 @@ Both flags are required. `--live` alone exits nonzero and does not spawn. `OPC_O
 The live section runs the same two goals:
 
 - **Easy** stays coordinator-direct. State `converging`. No worker is started. `githubWritePerformed` stays false.
-- **Normal** spawns `orca` for run-create, task-create, worker-start, and check. The dig tool returns before the human ask (`waiting` or `converging`). It does not enter `awaiting_human_pr` by itself and it does not open a pull request.
+- **Normal** spawns `orca orchestration run-create`, `task-create`, `worker-start`, and `check` (see the checklist). The dig tool returns before the human ask (`waiting` or `converging`). It does not enter `awaiting_human_pr` by itself and it does not open a pull request. A green unit test is not this live spawn. Re-running it stays with the operator.
 
 The dry-run half already proved the stop at `awaiting_human_pr`. A live parse advances the same states and still stops there once a verdict is recorded. The live half does not record that verdict and does not answer open, update, or merge.
 
@@ -86,9 +86,29 @@ A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. The adapter 
 
 ## Confirm the CLI spellings
 
-Subcommands and flag names are only in [`packages/orca-adapter/src/cli.ts`](../packages/orca-adapter/src/cli.ts). `orcaCliConfirmTodo()` prints the checklist (binary `orca`, the Linux fallback `orca-ide`, and one line per subcommand).
+Subcommands and flag names are only in [`packages/orca-adapter/src/cli.ts`](../packages/orca-adapter/src/cli.ts). `orcaCliConfirmTodo()` prints the checklist. The lines below were confirmed against Orca desktop **1.4.240** (`/Applications/Orca.app/Contents/Resources/bin/orca`, Mac local E2E). Top-level `orca run-create` is an unknown command. `status` stays top-level. Every other verb is `orca orchestration <verb>`.
 
-While Orca desktop is running, compare each line with the real CLI (`orca` help, then each subcommand). An unchecked line is not a contract. A green dry-run does not check the boxes. If the desktop spelling differs, stop and record the difference. Do not paper over a failed parse by filling in an id.
+```
+[x] status
+[x] orchestration run-create --objective
+[x] orchestration task-create --spec --run
+[x] orchestration task-list --run
+[x] orchestration worker-start --task --agent --worktree --run
+[x] orchestration worker-show --dispatch
+[x] orchestration worker-release --dispatch
+[x] orchestration check --run
+[x] orchestration reply --id --body --run
+[x] orchestration gate-create --task --question
+[x] orchestration gate-resolve --id --resolution
+```
+
+Bindings the adapter passes: goal text is `--objective`; the task spec is `--spec` (not `--task-title`); a parsed run id is `--run`; a parsed task id is `--task`; worker `dsh` is `--agent` (in-repo docs name that agent `dsh`); worktree `new-child` is `--worktree`; the worker id from stdout is `--dispatch`; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`.
+
+Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo` or `--base-branch`. `--json` is not passed. Live `reply` refuses when the caller did not supply a message id.
+
+The stdout line protocol (`run-id:`, `task-id:`, `worker-id:`, and the other keys in `parse.ts`) was not part of that help confirm. Output that is not that protocol is unparseable. Do not paper over a failed parse by filling in an id.
+
+A checked box is the 1.4.240 help confirm. It is not a green live spawn. After this change is merged, re-run `OPC_ORCA_LIVE=1 npm run smoke:local -- --live` on the Mac. That re-run is operator-owned.
 
 ## What you should not see
 
