@@ -1,0 +1,51 @@
+name: Test
+
+# The only check this scaffold expects to go green.
+# Risk tier and review gate are Phase 0 echoes and are not in `needs`.
+# The merge queue is not enabled, and this workflow does not listen for one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: node
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Node.js version
+        run: node -e 'const [maj,min]=process.versions.node.split(".").map(Number); if (maj<22 || (maj===22 && min<19)) { console.error("Node >=22.19 required, got "+process.version); process.exit(1) } console.log(process.version)'
+      - name: Test when a test script exists
+        run: |
+          if [ ! -f package.json ]; then
+            echo "no package.json; version check only"
+            exit 0
+          fi
+          set +e
+          node --input-type=module -e 'import { readFile } from "node:fs/promises"; const pkg = JSON.parse(await readFile("package.json","utf8")); if (!pkg.scripts || !pkg.scripts.test) process.exit(2)'
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "no npm test script; version check only"
+            exit 0
+          fi
+          if [ "$code" -ne 0 ]; then
+            exit "$code"
+          fi
+          npm ci
+          npm test

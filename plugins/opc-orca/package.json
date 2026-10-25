@@ -1,0 +1,25 @@
+{
+  "name": "@opc-orca/plugin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DeepSeek Harness plugin stub for OPC-ORCA. v0 registers no tools and performs no GitHub writes.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "opc-orca"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

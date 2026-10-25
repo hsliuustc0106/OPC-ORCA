@@ -1,0 +1,13 @@
+{
+  "name": "@opc-orca/coordinator",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dig-loop state machine. Stops at the human PR gate. Does not call Orca or GitHub.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

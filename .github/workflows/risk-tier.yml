@@ -1,0 +1,20 @@
+name: Risk tier (report only)
+
+# Phase 0 placeholder. Not a required check. Does not label, comment, or merge.
+# Keep this job out of branch protection. continue-on-error so a future echo
+# failure still cannot block a pull request.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: risk tier (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Phase0 report
+        run: echo "Phase0 report-only: risk tier is not computed. Nothing is blocked, labeled, or merged."
