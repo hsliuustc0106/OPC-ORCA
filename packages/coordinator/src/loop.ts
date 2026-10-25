@@ -64,6 +64,23 @@ export interface DigLoop {
    */
   reply(input: { text: string }): Promise<void>
   /**
+   * Open an Orca backend gate while `waiting`. Calls the adapter's
+   * `gate-create` in dry-run and records the reason. Does not change state.
+   * Not a check, not convergence, and not the human PR yes: it must not
+   * enter `awaiting_human_pr`. A rejection leaves the state on `waiting`
+   * and stores no gate-create intent. Does not invent a run id or a gate id.
+   */
+  gateCreate(input: { reason: string }): Promise<void>
+  /**
+   * Resolve an Orca backend gate while `waiting`. Calls the adapter's
+   * `gate-resolve` in dry-run and records the resolution. Does not change
+   * state. Not the human PR yes: it must not enter `awaiting_human_pr`, and
+   * it does not open, update, or merge a pull request. A rejection leaves
+   * the state on `waiting` and stores no gate-resolve intent. Does not
+   * invent a gate id or an exit code.
+   */
+  gateResolve(input: { resolution: string }): Promise<void>
+  /**
    * After `converging` on the Orca worker path (the worker is done with its
    * tip). Calls the adapter's `worker-release` in dry-run and records that
    * plan. Does not change state and does not open a pull request. A
@@ -102,20 +119,22 @@ function normalizeVerdict(verdict: Verdict, previous: Verdict | null): Verdict {
 export interface DigLoopOptions {
   /**
    * Adapter for normal-task dispatch, the waiting-loop check, observation
-   * (`status`, `task-list`, `worker-show`), `reply` while waiting, and
-   * `worker-release` after converging. Default: dry-run, no binary required.
-   * A live adapter is called the same way and must reject; the loop does not
-   * invent a run id from that rejection. A rejected check is not converged.
+   * (`status`, `task-list`, `worker-show`), `reply` while waiting, backend
+   * `gate-create` and `gate-resolve` while waiting, and `worker-release`
+   * after converging. Default: dry-run, no binary required. A live adapter
+   * is called the same way and must reject; the loop does not invent a run
+   * id or a gate id from that rejection. A rejected check is not converged.
    * A rejected observation is not a successful read. A rejected reply is not
-   * an answer and is not the human PR yes. A rejected worker-release is not
-   * a released worker.
+   * an answer and is not the human PR yes. A rejected gate is not a created
+   * or resolved backend gate and is not the human PR yes. A rejected
+   * worker-release is not a released worker.
    */
   adapter?: OrcaAdapter
   /** Repository passed to run-create. Required before `bindRun`. */
   repo?: string
 }
 
-const FABRICATED_ID = /^(runId|taskId|workerId|messageId|exitCode)$/
+const FABRICATED_ID = /^(runId|taskId|workerId|messageId|gateId|exitCode)$/
 
 function toIntent(call: PlannedOrcaCall): Intent {
   return { command: call.command, args: { ...call.args } }
@@ -157,6 +176,20 @@ function requireDryPlan(call: PlannedOrcaCall, command: PlannedOrcaCall['command
     const text = call.args.text
     if (Object.keys(call.args).length !== 1 || text === undefined || text.trim().length === 0) {
       throw new TypeError('dry-run reply must record the answer text and no id')
+    }
+    return
+  }
+  if (command === 'gate-create') {
+    const reason = call.args.reason
+    if (Object.keys(call.args).length !== 1 || reason === undefined || reason.trim().length === 0) {
+      throw new TypeError('dry-run gate-create must record the reason and no id')
+    }
+    return
+  }
+  if (command === 'gate-resolve') {
+    const resolution = call.args.resolution
+    if (Object.keys(call.args).length !== 1 || resolution === undefined || resolution.trim().length === 0) {
+      throw new TypeError('dry-run gate-resolve must record the resolution and no id')
     }
     return
   }
@@ -351,6 +384,54 @@ export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
           }
           intents.push(toIntent(answered))
           // State stays waiting. Reply is a worker answer, not the human PR yes.
+        } finally {
+          adapterBusy = false
+        }
+      })()
+    },
+    gateCreate(input) {
+      need(['waiting'], 'create a backend gate')
+      if (typeof input?.reason !== 'string' || input.reason.trim().length === 0) {
+        throw new TypeError('gate reason is required')
+      }
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'create a backend gate while another adapter call is in flight')
+      }
+      const reason = input.reason.trim()
+      adapterBusy = true
+      return (async () => {
+        try {
+          const created = await adapter.gateCreate({ reason })
+          requireDryPlan(created, 'gate-create')
+          if (created.args.reason !== reason) {
+            throw new TypeError('dry-run gate-create plan must record the reason')
+          }
+          intents.push(toIntent(created))
+          // State stays waiting. A backend gate is not the human PR yes.
+        } finally {
+          adapterBusy = false
+        }
+      })()
+    },
+    gateResolve(input) {
+      need(['waiting'], 'resolve a backend gate')
+      if (typeof input?.resolution !== 'string' || input.resolution.trim().length === 0) {
+        throw new TypeError('gate resolution is required')
+      }
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'resolve a backend gate while another adapter call is in flight')
+      }
+      const resolution = input.resolution.trim()
+      adapterBusy = true
+      return (async () => {
+        try {
+          const resolved = await adapter.gateResolve({ resolution })
+          requireDryPlan(resolved, 'gate-resolve')
+          if (resolved.args.resolution !== resolution) {
+            throw new TypeError('dry-run gate-resolve plan must record the resolution')
+          }
+          intents.push(toIntent(resolved))
+          // State stays waiting. Resolving a backend gate is not the human PR yes.
         } finally {
           adapterBusy = false
         }

@@ -21,7 +21,7 @@ Orca                      Run / Task / Dispatch
 worker                    default: dsh + a new-child worktree
 ```
 
-v0 is this layout and the stubs. A dry-run records the dispatch plan, the waiting-loop check, observation (`status`, `task-list`, `worker-show`), a waiting-loop `reply`, and `worker-release` after converging, without the CLI. Observation does not converge. Reply is not the human PR yes. Nothing here calls a live Orca, opens a pull request, or enables a merge queue.
+v0 is this layout and the stubs. A dry-run records the dispatch plan, the waiting-loop check, observation (`status`, `task-list`, `worker-show`), a waiting-loop `reply`, backend `gate-create` and `gate-resolve` while waiting, and `worker-release` after converging, without the CLI. Observation does not converge. Reply and those backend gates are not the human PR yes. Nothing here calls a live Orca, opens a pull request, or enables a merge queue.
 
 ## Docs
 

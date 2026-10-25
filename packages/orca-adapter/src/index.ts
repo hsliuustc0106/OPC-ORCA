@@ -5,6 +5,8 @@ export { createOrcaAdapter } from './adapter.ts'
 export type { CreateOrcaAdapterOptions } from './adapter.ts'
 export type {
   CheckInput,
+  GateCreateInput,
+  GateResolveInput,
   OrcaAdapter,
   OrcaCommand,
   OrcaWorker,

@@ -1,0 +1,1 @@
+While waiting, the coordinator may record gate-create and gate-resolve in dry-run. gate-create stores the reason and no run id or gate id. gate-resolve stores the resolution and no gate id or exit code. A live call still throws not-configured or not-implemented, and that throw stores no intent. These are Orca backend gates. They stay on waiting and are not the human PR yes.

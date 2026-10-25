@@ -101,7 +101,33 @@ export interface ReplyInput {
   text: string
 }
 
-/** Commands a dry-run records. Other commands still reject. */
+export interface GateCreateInput {
+  /**
+   * Live calls require this. Dry-run does not: there is no run yet, and the
+   * plan must not invent one. A supplied id is ignored, not returned.
+   */
+  runId?: string
+  /**
+   * Dry-run records this reason. It is the planned backend gate, not a
+   * gate id and not the human PR yes.
+   */
+  reason: string
+}
+
+export interface GateResolveInput {
+  /**
+   * Live calls require this. Dry-run does not take a gate id and does not
+   * invent one. A supplied id is ignored, not returned.
+   */
+  gateId?: string
+  /**
+   * Dry-run records this resolution. It is a backend decision for a worker
+   * or task, not a gate id, not an exit code, and not the human PR yes.
+   */
+  resolution: string
+}
+
+/** Commands a dry-run records. */
 export type PlannedOrcaCommand =
   | 'run-create'
   | 'task-create'
@@ -112,10 +138,13 @@ export type PlannedOrcaCommand =
   | 'worker-show'
   | 'worker-release'
   | 'reply'
+  | 'gate-create'
+  | 'gate-resolve'
 
 /**
  * A plan, not a live Orca result. `dryRun` is always true. There is no run
- * id, task id, worker id, message id, exit code, or status payload on this object.
+ * id, task id, worker id, message id, gate id, exit code, or status payload
+ * on this object.
  */
 export interface PlannedOrcaCall {
   readonly dryRun: true
@@ -128,7 +157,7 @@ export interface OrcaAdapter {
   readonly executable: string | null
   /** True only when this adapter was created with `dryRun`. */
   readonly dryRun: boolean
-  /** Plans recorded by dry-run dispatch, check, observation, reply, and worker-release. Empty when `dryRun` is false. */
+  /** Plans recorded by dry-run dispatch, check, observation, reply, worker-release, and backend gates. Empty when `dryRun` is false. */
   readonly planned: readonly PlannedOrcaCall[]
   /**
    * Dry-run resolves a plan and does not require the CLI. The plan has no
@@ -175,6 +204,18 @@ export interface OrcaAdapter {
    * PR approval.
    */
   reply(input: ReplyInput): Promise<PlannedOrcaCall>
-  gateCreate(input: { runId: string; reason: string }): Promise<never>
-  gateResolve(input: { gateId: string; resolution: string }): Promise<never>
+  /**
+   * Dry-run resolves a plan with the reason and does not require the CLI
+   * or a run id. Otherwise the promise rejects with not-configured or
+   * not-implemented and never resolves a gate id. This is an Orca backend
+   * gate, not a human PR approval.
+   */
+  gateCreate(input: GateCreateInput): Promise<PlannedOrcaCall>
+  /**
+   * Dry-run resolves a plan with the resolution and does not require the
+   * CLI or a gate id. Otherwise the promise rejects with not-configured or
+   * not-implemented and never resolves a gate id or an exit code. This is
+   * an Orca backend gate, not a human PR approval.
+   */
+  gateResolve(input: GateResolveInput): Promise<PlannedOrcaCall>
 }

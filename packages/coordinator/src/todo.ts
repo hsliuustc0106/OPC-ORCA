@@ -1,13 +1,18 @@
 /**
  * What is still unwired after dry-run dispatch, the waiting-loop check,
- * observation, reply, and worker-release. Normal tasks call the adapter for
- * run-create, task-create, worker-start, and check when `dryRun` is set.
- * While waiting they may also call status, task-list, worker-show, and reply
- * in dryRun. After converging, the Orca worker path may call worker-release
- * in dryRun. A thrown adapter error is failure, not a converged tip, not a
- * successful observation, not a worker answer, and not a released worker.
- * Do not treat a stub throw as success. Observation is not a substitute for
- * check. Reply is not the human PR yes and does not move awaiting_human_pr.
+ * observation, reply, worker-release, and backend gates. Normal tasks call
+ * the adapter for run-create, task-create, worker-start, and check when
+ * `dryRun` is set. While waiting they may also call status, task-list,
+ * worker-show, reply, gate-create, and gate-resolve in dryRun. After
+ * converging, the Orca worker path may call worker-release in dryRun. A
+ * thrown adapter error is failure, not a converged tip, not a successful
+ * observation, not a worker answer, not a released worker, and not a
+ * created or resolved backend gate. Do not treat a stub throw as success.
+ * Observation is not a substitute for check. Reply is not the human PR yes
+ * and does not move awaiting_human_pr. gate-create and gate-resolve are
+ * Orca backend gates for a worker or task decision. They stay on waiting
+ * and do not move awaiting_human_pr. Live spawn of the binary is still
+ * unwired.
  */
 export const WIRE_ADAPTER_TODO =
   'TODO(wire-adapter): normal-task run-create, task-create, and worker-start ' +
@@ -21,13 +26,18 @@ export const WIRE_ADAPTER_TODO =
   '(no run id, message id, or exit code). Reply stays on waiting. It is a ' +
   'worker-side answer and is not the human PR yes, and it does not move ' +
   'awaiting_human_pr. ' +
+  'While waiting, gate-create and gate-resolve may be called in dryRun. ' +
+  'gate-create records the reason and no run id or gate id. gate-resolve ' +
+  'records the resolution and no gate id or exit code. They are Orca backend ' +
+  'gates for a worker or task decision. They stay on waiting. They are not ' +
+  'the human PR yes, and they do not move awaiting_human_pr. ' +
   'After converging, worker-release may be called in dryRun and records that ' +
   'plan (no worker id). It does not open, update, or merge a pull request. ' +
-  'They do not spawn, and they do not invent a run id. ' +
+  'They do not spawn, and they do not invent a run id, a gate id, or an exit code. ' +
   'Without dryRun the adapter throws not-configured until `orca` (Linux: `orca-ide`) ' +
   'is on PATH, or not-implemented when the binary is present, and that throw is failure, ' +
-  'not a converged tip and not a successful reply or release. ' +
-  'Still unwired: gate-create, gate-resolve. ' +
+  'not a converged tip, not a successful reply or release, and not a resolved gate. ' +
+  'Still unwired: live spawn of the orca binary. ' +
   'Easy tasks stay on the coordinator-direct path and skip worker dispatch. ' +
   'awaiting_human_pr stops the loop: do not open, update, or merge a pull request here. ' +
   'Orca gate-resolve is not a substitute for the human PR yes.'
