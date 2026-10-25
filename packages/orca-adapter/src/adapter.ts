@@ -9,15 +9,19 @@ import type {
   PlannedOrcaCall,
   PlannedOrcaCommand,
   RunCreateInput,
+  StatusInput,
   TaskCreateInput,
+  TaskListInput,
+  WorkerShowInput,
   WorkerStartInput,
 } from './types.ts'
 
 export interface CreateOrcaAdapterOptions extends ResolveOptions {
   /**
-   * Record planned run-create, task-create, worker-start, and check.
+   * Record planned run-create, task-create, worker-start, check, and the
+   * observation commands status, task-list, and worker-show.
    * Does not spawn and does not require the `orca` binary.
-   * Default false: those calls reject and never resolve an id.
+   * Default false: those calls reject and never resolve an id or a status payload.
    */
   dryRun?: boolean
 }
@@ -26,9 +30,9 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
  * TODO(orca-cli): when a live command is wired, spawn the resolved binary
  * (`orca`, or `orca-ide` on Linux) as `[bin, command, …]` and parse its
  * stdout. Do not add a process spawn until that parser exists, and never
- * synthesize a run id, task id, gate id, or exit code 0.
+ * synthesize a run id, task id, worker id, gate id, exit code 0, or status payload.
  * `dryRun` returns before that refusal and only for run-create, task-create,
- * worker-start, and check.
+ * worker-start, check, status, task-list, and worker-show.
  */
 async function refuse(bin: string | null, platform: string, command: OrcaCommand): Promise<never> {
   if (!bin) {
@@ -87,8 +91,10 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
     get planned() {
       return planned.map((call) => ({ dryRun: true as const, command: call.command, args: { ...call.args } }))
     },
-    async status() {
-      return refuse(executable, platform, 'status')
+    async status(_input: StatusInput = {}) {
+      if (!dryRun) return refuse(executable, platform, 'status')
+      // A supplied runId is not copied. Dry-run must not look like a status payload.
+      return plan(planned, 'status', {})
     },
     async runCreate(input: RunCreateInput) {
       required(input.goal, 'goal')
@@ -113,9 +119,13 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
         ...dispatchArgs(input.worker, input.worktree),
       })
     },
-    async taskList(input) {
-      required(input.runId, 'runId')
-      return refuse(executable, platform, 'task-list')
+    async taskList(input: TaskListInput = {}) {
+      if (!dryRun) {
+        required(input.runId, 'runId')
+        return refuse(executable, platform, 'task-list')
+      }
+      // runId is not copied. Dry-run must not look like a listed run.
+      return plan(planned, 'task-list', {})
     },
     async workerStart(input: WorkerStartInput) {
       if (!dryRun) {
@@ -126,9 +136,13 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       // taskId is not copied. Dry-run must not look like a started worker.
       return plan(planned, 'worker-start', dispatchArgs(input.worker, input.worktree))
     },
-    async workerShow(input) {
-      required(input.workerId, 'workerId')
-      return refuse(executable, platform, 'worker-show')
+    async workerShow(input: WorkerShowInput = {}) {
+      if (!dryRun) {
+        required(input.workerId, 'workerId')
+        return refuse(executable, platform, 'worker-show')
+      }
+      // workerId is not copied. Dry-run must not look like a shown worker.
+      return plan(planned, 'worker-show', {})
     },
     async workerRelease(input) {
       required(input.workerId, 'workerId')

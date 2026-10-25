@@ -2,7 +2,7 @@
   "name": "@opc-orca/orca-adapter",
   "version": "0.0.0",
   "private": true,
-  "description": "Typed Orca CLI surface. dryRun records dispatch and check plans without the binary. Otherwise throws and never reports a fake success.",
+  "description": "Typed Orca CLI surface. dryRun records dispatch, check, and observation plans without the binary. Otherwise throws and never reports a fake success.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
