@@ -1,4 +1,4 @@
-import { orcaCliArgs, ORCA_CLI, type OrcaFlagName } from './cli.ts'
+import { orcaCliArgs, orcaCommandHead, ORCA_CLI, type OrcaFlagName } from './cli.ts'
 import { OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
 import { parseLiveStdout } from './parse.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
@@ -42,7 +42,8 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
    * off. Ignored when `dryRun` is true. Default false.
    * This option is the adapter mechanism. A dig tool caller does not set it.
    * `runDig` sets it only after the operator allows live.
-   * TODO(orca-cli): subcommand and flag spellings are `src/cli.ts`.
+   * TODO(orca-cli): subcommand and flag spellings are `src/cli.ts`
+   * (Orca desktop 1.4.240). This file must call `orcaCliArgs`.
    */
   live?: boolean
 }
@@ -115,9 +116,9 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
 
   function refuse(command: OrcaCommand): never {
     if (!executable) notConfigured(command)
-    const argv = [executable, command]
+    const argv = [executable, ...orcaCommandHead(command)]
     throw new OrcaStubError(
-      `refusing to spawn ${executable} ${command}: live spawn is off, no success is returned`,
+      `refusing to spawn ${argv.join(' ')}: live spawn is off, no success is returned`,
       argv,
     )
   }
@@ -179,11 +180,9 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       const repo = required(input.repo, 'repo')
       const baseRef = input.baseRef === undefined ? undefined : required(input.baseRef, 'baseRef')
       const command = ORCA_CLI.commands.runCreate
-      const flags: Flag[] = [
-        [ORCA_CLI.flags.goal, goal],
-        [ORCA_CLI.flags.repo, repo],
-      ]
-      if (baseRef !== undefined) flags.push([ORCA_CLI.flags.base, baseRef])
+      // repo and baseRef are the product binding, recorded on the dry-run plan.
+      // Orca 1.4.240 run-create accepts the objective flag only. Do not pass them.
+      const flags: Flag[] = [[ORCA_CLI.flags.objective, goal]]
       return dispatch(command, flags, () => {
         const args: Record<string, string> = { goal, repo }
         if (baseRef !== undefined) args.base = baseRef
@@ -194,29 +193,24 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       const command = ORCA_CLI.commands.taskCreate
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
-        const title = required(input.title, 'title')
-        defaultWorker(input.worker, input.worktree)
+        const spec = required(input.spec, 'spec')
         if (!live) return refuse(command)
+        // Worker and worktree are worker-start flags, not task-create flags.
         return runLive(command, [
-          [ORCA_CLI.flags.runId, runId],
-          [ORCA_CLI.flags.title, title],
-          [ORCA_CLI.flags.worker, input.worker ?? 'dsh'],
-          [ORCA_CLI.flags.worktree, input.worktree ?? 'new-child'],
+          [ORCA_CLI.flags.spec, spec],
+          [ORCA_CLI.flags.run, runId],
         ])
       }
-      const title = required(input.title, 'title')
+      const spec = required(input.spec, 'spec')
       // runId is not copied. Dry-run must not look like a created run.
-      return plan(planned, command, {
-        title,
-        ...dispatchArgs(input.worker, input.worktree),
-      })
+      return plan(planned, command, { spec })
     },
     async taskList(input: TaskListInput = {}) {
       const command = ORCA_CLI.commands.taskList
       if (!dryRun) {
         const runId = required(input.runId, 'runId')
         if (!live) return refuse(command)
-        return runLive(command, [[ORCA_CLI.flags.runId, runId]])
+        return runLive(command, [[ORCA_CLI.flags.run, runId]])
       }
       // runId is not copied. Dry-run must not look like a listed run.
       return plan(planned, command, {})
@@ -225,15 +219,18 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       const command = ORCA_CLI.commands.workerStart
       if (!dryRun) {
         const taskId = required(input.taskId, 'taskId')
+        const runId = input.runId === undefined ? undefined : required(input.runId, 'runId')
         defaultWorker(input.worker, input.worktree)
         if (!live) return refuse(command)
-        return runLive(command, [
-          [ORCA_CLI.flags.taskId, taskId],
-          [ORCA_CLI.flags.worker, input.worker ?? 'dsh'],
+        const flags: Flag[] = [
+          [ORCA_CLI.flags.task, taskId],
+          [ORCA_CLI.flags.agent, input.worker ?? 'dsh'],
           [ORCA_CLI.flags.worktree, input.worktree ?? 'new-child'],
-        ])
+        ]
+        if (runId !== undefined) flags.push([ORCA_CLI.flags.run, runId])
+        return runLive(command, flags)
       }
-      // taskId is not copied. Dry-run must not look like a started worker.
+      // taskId and runId are not copied. Dry-run must not look like a started worker.
       return plan(planned, command, dispatchArgs(input.worker, input.worktree))
     },
     async workerShow(input: WorkerShowInput = {}) {
@@ -241,7 +238,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       if (!dryRun) {
         const workerId = required(input.workerId, 'workerId')
         if (!live) return refuse(command)
-        return runLive(command, [[ORCA_CLI.flags.workerId, workerId]])
+        return runLive(command, [[ORCA_CLI.flags.dispatch, workerId]])
       }
       // workerId is not copied. Dry-run must not look like a shown worker.
       return plan(planned, command, {})
@@ -251,7 +248,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       if (!dryRun) {
         const workerId = required(input.workerId, 'workerId')
         if (!live) return refuse(command)
-        return runLive(command, [[ORCA_CLI.flags.workerId, workerId]])
+        return runLive(command, [[ORCA_CLI.flags.dispatch, workerId]])
       }
       // workerId is not copied. Dry-run must not look like a released worker.
       return plan(planned, command, {})
@@ -262,7 +259,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
         const runId = required(input.runId, 'runId')
         if (!live) return refuse(command)
         // The caller's converged flag is not passed and not copied.
-        return runLive(command, [[ORCA_CLI.flags.runId, runId]])
+        return runLive(command, [[ORCA_CLI.flags.run, runId]])
       }
       if (typeof input.converged !== 'boolean') throw new TypeError('converged is required')
       // runId is not copied. Dry-run must not look like a checked run.
@@ -271,31 +268,35 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
     async reply(input: ReplyInput) {
       const command = ORCA_CLI.commands.reply
       if (!dryRun) {
-        const runId = required(input.runId, 'runId')
+        // Desktop reply requires the message id flag. Do not invent one from the run.
+        const messageId = required(input.messageId, 'messageId')
         const text = required(input.text, 'text')
+        const runId = required(input.runId, 'runId')
         if (!live) return refuse(command)
         return runLive(command, [
-          [ORCA_CLI.flags.runId, runId],
-          [ORCA_CLI.flags.text, text],
+          [ORCA_CLI.flags.id, messageId],
+          [ORCA_CLI.flags.body, text],
+          [ORCA_CLI.flags.run, runId],
         ])
       }
       const text = required(input.text, 'text')
-      // runId is not copied. Dry-run must not look like a sent message.
+      // runId and messageId are not copied. Dry-run must not look like a sent message.
       return plan(planned, command, { text })
     },
     async gateCreate(input: GateCreateInput) {
       const command = ORCA_CLI.commands.gateCreate
       if (!dryRun) {
-        const runId = required(input.runId, 'runId')
+        // Desktop gate-create takes the task id, not the run id. Do not pass the run id.
+        const taskId = required(input.taskId, 'taskId')
         const reason = required(input.reason, 'reason')
         if (!live) return refuse(command)
         return runLive(command, [
-          [ORCA_CLI.flags.runId, runId],
-          [ORCA_CLI.flags.reason, reason],
+          [ORCA_CLI.flags.task, taskId],
+          [ORCA_CLI.flags.question, reason],
         ])
       }
       const reason = required(input.reason, 'reason')
-      // runId is not copied. Dry-run must not look like a created gate.
+      // taskId is not copied. Dry-run must not look like a created gate.
       return plan(planned, command, { reason })
     },
     async gateResolve(input: GateResolveInput) {
@@ -305,7 +306,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
         const resolution = required(input.resolution, 'resolution')
         if (!live) return refuse(command)
         return runLive(command, [
-          [ORCA_CLI.flags.gateId, gateId],
+          [ORCA_CLI.flags.id, gateId],
           [ORCA_CLI.flags.resolution, resolution],
         ])
       }

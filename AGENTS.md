@@ -74,7 +74,7 @@ npm run smoke:local
 
 - `plugins/opc-orca/` — DSH plugin (`@opc-orca/plugin`). Registers a `dig` tool. Default dry-run. Live only when the operator set `OPC_ORCA_LIVE=1` and config `live` is not false. A caller `live: true` does not grant spawn. Does not open, update, or merge.
 - `packages/coordinator/` — dig-loop state machine. Dry-run plans stay as recorded. A parsed live result advances the same states. Stops in `awaiting_human_pr`.
-- `packages/orca-adapter/` — typed Orca CLI surface. Dry-run records a plan and does not spawn. Live spawn of `orca` / `orca-ide` is flag-gated and fail-closed. Subcommands and flag names live in `src/cli.ts`. Otherwise throws `not-configured` or refuses to spawn.
+- `packages/orca-adapter/` — typed Orca CLI surface. Dry-run records a plan and does not spawn. Live spawn of `orca` / `orca-ide` is flag-gated and fail-closed. Subcommands and flag names live in `src/cli.ts`. Live argv is `orchestration <verb>` for every verb except top-level `status`, using the Orca desktop 1.4.240 flag names in that file. Otherwise throws `not-configured` or refuses to spawn.
 - `docs/` — architecture, the human gate, the coordinator steps, the local runbook.
 - `.github/workflows/test.yml` — the check that should stay green.
 - `.github/workflows/risk-tier.yml`, `review-gate.yml` — Phase 0 echoes. `continue-on-error`. Not required.

@@ -66,11 +66,11 @@ test('present CLI still refuses to spawn', async () => {
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'worker-start'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'worker-start'])
       return true
     },
   )
-  await assert.rejects(() => adapter.taskCreate({ runId: 'run-1', title: 'dig', worker: 'dsh', worktree: 'new-child' }), OrcaStubError)
+  await assert.rejects(() => adapter.taskCreate({ runId: 'run-1', spec: 'dig' }), OrcaStubError)
   await assert.rejects(
     () => adapter.workerStart({ taskId: 'task-1', worker: 'other' as 'dsh' }),
     TypeError,
@@ -80,7 +80,7 @@ test('present CLI still refuses to spawn', async () => {
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'check'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'check'])
       return true
     },
   )
@@ -97,7 +97,7 @@ test('present CLI still refuses to spawn', async () => {
     () => adapter.taskList({ runId: 'run-1' }),
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'task-list'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'task-list'])
       return true
     },
   )
@@ -105,7 +105,7 @@ test('present CLI still refuses to spawn', async () => {
     () => adapter.workerShow({ workerId: 'worker-1' }),
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'worker-show'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'worker-show'])
       return true
     },
   )
@@ -114,25 +114,25 @@ test('present CLI still refuses to spawn', async () => {
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'worker-release'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'worker-release'])
       return true
     },
   )
   await assert.rejects(
-    () => adapter.reply({ runId: 'run-1', text: 'ship the tip' }),
+    () => adapter.reply({ runId: 'run-1', messageId: 'msg-1', text: 'ship the tip' }),
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'reply'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'reply'])
       return true
     },
   )
   await assert.rejects(
-    () => adapter.gateCreate({ runId: 'run-1', reason: 'worker blocked' }),
+    () => adapter.gateCreate({ taskId: 'task-1', reason: 'worker blocked' }),
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'gate-create'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'gate-create'])
       return true
     },
   )
@@ -141,7 +141,7 @@ test('present CLI still refuses to spawn', async () => {
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
-      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'gate-resolve'])
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'gate-resolve'])
       return true
     },
   )
@@ -159,19 +159,20 @@ test('dry-run records dispatch without a binary and does not return ids', async 
   })
   const task = await adapter.taskCreate({
     runId: 'run-fake',
-    title: 'dig',
-    worker: 'dsh',
-    worktree: 'new-child',
+    spec: 'dig',
   })
-  const started = await adapter.workerStart({ taskId: 'task-fake' })
+  const started = await adapter.workerStart({ taskId: 'task-fake', runId: 'run-fake' })
   assert.equal(run.dryRun, true)
   assert.equal(Object.hasOwn(run.args, 'runId'), false)
   assert.equal(Object.hasOwn(task.args, 'runId'), false)
   assert.equal(Object.hasOwn(started.args, 'taskId'), false)
   assert.equal(Object.hasOwn(started.args, 'exitCode'), false)
   assert.deepEqual(run.args, { goal: 'dig', repo: 'hsliuustc0106/OPC-ORCA', base: 'origin/main' })
-  assert.deepEqual(task.args, { title: 'dig', worker: 'dsh', worktree: 'new-child' })
+  assert.deepEqual(task.args, { spec: 'dig' })
+  assert.equal(Object.hasOwn(task.args, 'worker'), false)
+  assert.equal(Object.hasOwn(task.args, 'worktree'), false)
   assert.deepEqual(started.args, { worker: 'dsh', worktree: 'new-child' })
+  assert.equal(Object.hasOwn(started.args, 'runId'), false)
   const checked = await adapter.check({ runId: 'run-fake', converged: false })
   assert.equal(checked.dryRun, true)
   assert.equal(checked.command, 'check')
@@ -199,14 +200,14 @@ test('dry-run records dispatch without a binary and does not return ids', async 
     assert.equal(Object.hasOwn(call.args, 'payload'), false)
   }
   const released = await adapter.workerRelease({ workerId: 'worker-fake' })
-  const answered = await adapter.reply({ runId: 'run-fake', text: 'ship the tip' })
+  const answered = await adapter.reply({ runId: 'run-fake', messageId: 'msg-fake', text: 'ship the tip' })
   assert.equal(released.dryRun, true)
   assert.equal(released.command, 'worker-release')
   assert.deepEqual(released.args, {})
   assert.equal(answered.dryRun, true)
   assert.equal(answered.command, 'reply')
   assert.deepEqual(answered.args, { text: 'ship the tip' })
-  const created = await adapter.gateCreate({ runId: 'run-fake', reason: 'worker blocked' })
+  const created = await adapter.gateCreate({ taskId: 'task-fake', reason: 'worker blocked' })
   const resolved = await adapter.gateResolve({ gateId: 'gate-fake', resolution: 'continue' })
   assert.equal(created.dryRun, true)
   assert.equal(created.command, 'gate-create')
@@ -219,6 +220,7 @@ test('dry-run records dispatch without a binary and does not return ids', async 
     assert.equal(Object.hasOwn(call.args, 'taskId'), false)
     assert.equal(Object.hasOwn(call.args, 'workerId'), false)
     assert.equal(Object.hasOwn(call.args, 'messageId'), false)
+    assert.equal(Object.hasOwn(answered.args, 'messageId'), false)
     assert.equal(Object.hasOwn(call.args, 'gateId'), false)
     assert.equal(Object.hasOwn(call.args, 'exitCode'), false)
   }
@@ -242,10 +244,10 @@ test('dry-run records dispatch without a binary and does not return ids', async 
   await assert.rejects(() => adapter.reply({ text: ' ' }), TypeError)
   await assert.rejects(() => adapter.reply({ runId: 'run-1', text: '' }), TypeError)
   await assert.rejects(() => adapter.gateCreate({ reason: ' ' }), TypeError)
-  await assert.rejects(() => adapter.gateCreate({ runId: 'run-1', reason: '' }), TypeError)
+  await assert.rejects(() => adapter.gateCreate({ taskId: 'task-1', reason: '' }), TypeError)
   await assert.rejects(() => adapter.gateResolve({ resolution: ' ' }), TypeError)
   await assert.rejects(() => adapter.gateResolve({ gateId: 'gate-1', resolution: '' }), TypeError)
-  await assert.rejects(() => adapter.taskCreate({ title: 'dig', worker: 'other' as 'dsh' }), TypeError)
+  await assert.rejects(() => adapter.taskCreate({ spec: ' ' }), TypeError)
   assert.equal(adapter.planned.length, 11)
 
   const dir = binDir(['orca'])
@@ -263,8 +265,8 @@ test('dry-run records dispatch without a binary and does not return ids', async 
   assert.equal(Object.hasOwn(presentTasks.args, 'runId'), false)
   assert.equal(Object.hasOwn(presentWorker.args, 'workerId'), false)
   const presentRelease = await present.workerRelease()
-  const presentReply = await present.reply({ runId: 'run-fake', text: 'ship the tip' })
-  const presentGate = await present.gateCreate({ runId: 'run-fake', reason: 'worker blocked' })
+  const presentReply = await present.reply({ runId: 'run-fake', messageId: 'msg-fake', text: 'ship the tip' })
+  const presentGate = await present.gateCreate({ taskId: 'task-fake', reason: 'worker blocked' })
   const presentResolve = await present.gateResolve({ gateId: 'gate-fake', resolution: 'yes' })
   assert.deepEqual(presentRelease.args, {})
   assert.deepEqual(presentReply.args, { text: 'ship the tip' })
@@ -292,7 +294,7 @@ test('live path does not resolve a run id', async () => {
     OrcaNotConfiguredError,
   )
   await assert.rejects(
-    () => missing.taskCreate({ runId: 'run-1', title: 'dig', worker: 'dsh', worktree: 'new-child' }),
+    () => missing.taskCreate({ runId: 'run-1', spec: 'dig' }),
     OrcaNotConfiguredError,
   )
   await assert.rejects(() => missing.workerStart({ taskId: 'task-1' }), OrcaNotConfiguredError)
@@ -310,10 +312,11 @@ test('live path does not resolve a run id', async () => {
   await assert.rejects(() => missing.workerRelease({ workerId: 'worker-1' }), OrcaNotConfiguredError)
   await assert.rejects(() => missing.reply({ text: 'ship the tip' }), TypeError)
   await assert.rejects(() => missing.reply({ runId: 'run-1', text: ' ' }), TypeError)
-  await assert.rejects(() => missing.reply({ runId: 'run-1', text: 'ship the tip' }), OrcaNotConfiguredError)
+  await assert.rejects(() => missing.reply({ runId: 'run-1', messageId: 'msg-1', text: 'ship the tip' }), OrcaNotConfiguredError)
+  await assert.rejects(() => missing.reply({ runId: 'run-1', text: 'ship the tip' }), TypeError)
   await assert.rejects(() => missing.gateCreate({ reason: 'worker blocked' }), TypeError)
-  await assert.rejects(() => missing.gateCreate({ runId: 'run-1', reason: ' ' }), TypeError)
-  await assert.rejects(() => missing.gateCreate({ runId: 'run-1', reason: 'worker blocked' }), OrcaNotConfiguredError)
+  await assert.rejects(() => missing.gateCreate({ taskId: 'task-1', reason: ' ' }), TypeError)
+  await assert.rejects(() => missing.gateCreate({ taskId: 'task-1', reason: 'worker blocked' }), OrcaNotConfiguredError)
   await assert.rejects(() => missing.gateResolve({ resolution: 'continue' }), TypeError)
   await assert.rejects(() => missing.gateResolve({ gateId: 'gate-1', resolution: ' ' }), TypeError)
   await assert.rejects(
@@ -330,6 +333,7 @@ test('live path does not resolve a run id', async () => {
     (error: unknown) => {
       assert.ok(error instanceof OrcaStubError)
       assert.equal(error.code, 'not-implemented')
+      assert.deepEqual(error.argv, [path.join(dir, 'orca'), 'orchestration', 'run-create'])
       return true
     },
   )
@@ -339,8 +343,8 @@ test('live path does not resolve a run id', async () => {
   await assert.rejects(() => present.taskList({ runId: 'run-1' }), OrcaStubError)
   await assert.rejects(() => present.workerShow({ workerId: 'worker-1' }), OrcaStubError)
   await assert.rejects(() => present.workerRelease({ workerId: 'worker-1' }), OrcaStubError)
-  await assert.rejects(() => present.reply({ runId: 'run-1', text: 'ship the tip' }), OrcaStubError)
-  await assert.rejects(() => present.gateCreate({ runId: 'run-1', reason: 'worker blocked' }), OrcaStubError)
+  await assert.rejects(() => present.reply({ runId: 'run-1', messageId: 'msg-1', text: 'ship the tip' }), OrcaStubError)
+  await assert.rejects(() => present.gateCreate({ taskId: 'task-1', reason: 'worker blocked' }), OrcaStubError)
   await assert.rejects(() => present.gateResolve({ gateId: 'gate-1', resolution: 'continue' }), OrcaStubError)
   assert.deepEqual(present.planned, [])
 })

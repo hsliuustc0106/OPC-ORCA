@@ -6,6 +6,11 @@ import type { LiveOrcaIds, OrcaCommand } from './types.ts'
  * Values are tokens. `converged` must be `true` or `false`.
  * Unknown lines, duplicates, and a missing required field throw.
  * Nothing in here copies an id from the caller's arguments.
+ *
+ * These keys are this adapter's stdout contract. They are not the Orca
+ * 1.4.240 CLI flag names (`--run`, `--task`, `--dispatch`, `--id`). The
+ * desktop help confirm did not include a stdout sample. `--json` is not
+ * passed. Output that is not this protocol is unparseable.
  */
 const FIELD = /^([a-z]+(?:-[a-z]+)*): ([A-Za-z0-9][A-Za-z0-9._:-]*)$/
 

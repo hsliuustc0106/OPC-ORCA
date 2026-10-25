@@ -1,7 +1,7 @@
 /**
  * Subcommands the adapter can spawn when live is on.
- * Flag spellings live in `src/cli.ts` (`orcaCliConfirmTodo`). Confirm them
- * against the desktop CLI during the local run. They are not a guessed success.
+ * Flag spellings live in `src/cli.ts` (`orcaCliConfirmTodo`). They were
+ * confirmed against Orca desktop 1.4.240. They are not a guessed success.
  */
 export type OrcaCommand =
   | 'status'
@@ -16,13 +16,26 @@ export type OrcaCommand =
   | 'gate-create'
   | 'gate-resolve'
 
-/** v0 knows one worker and one worktree layout. Anything else is rejected. */
+/**
+ * v0 knows one agent and one worktree layout. Anything else is rejected.
+ * Live `worker-start` passes the agent as `--agent` (value `dsh`) and the
+ * worktree as `--worktree`. In-repo docs name that agent `dsh`.
+ */
 export type OrcaWorker = 'dsh'
 export type OrcaWorktree = 'new-child'
 
 export interface RunCreateInput {
+  /** Product goal. Live passes this as `--objective`. */
   goal: string
+  /**
+   * Product binding. Required so a plan names the repo. Orca 1.4.240
+   * `orchestration run-create` has no `--repo`. This value is not a CLI flag.
+   */
   repo: string
+  /**
+   * Product binding. The coordinator passes `origin/main`. Orca 1.4.240
+   * `orchestration run-create` has no `--base`. This value is not a CLI flag.
+   */
   baseRef?: string
 }
 
@@ -30,20 +43,30 @@ export interface TaskCreateInput {
   /**
    * Live calls require this. Dry-run does not: there is no run yet, and the
    * plan must not invent one. A supplied id is ignored, not returned.
+   * Live passes it as `--run`.
    */
   runId?: string
-  title: string
-  worker?: OrcaWorker
-  worktree?: OrcaWorktree
+  /**
+   * Task spec (the goal text). Live passes this as `--spec`. It is not a
+   * `--task-title`. Worker and worktree are not task-create fields.
+   */
+  spec: string
 }
 
 export interface WorkerStartInput {
   /**
    * Live calls require this. Dry-run does not take a task id and does not
-   * invent one. A supplied id is ignored, not returned.
+   * invent one. A supplied id is ignored, not returned. Live passes it as
+   * `--task`.
    */
   taskId?: string
+  /**
+   * Live passes this as `--run` when set. Dry-run does not copy it.
+   */
+  runId?: string
+  /** Live passes this as `--agent`. Default `dsh`. */
   worker?: OrcaWorker
+  /** Live passes this as `--worktree`. Default `new-child`. */
   worktree?: OrcaWorktree
 }
 
@@ -97,24 +120,32 @@ export interface ReplyInput {
   /**
    * Live calls require this. Dry-run does not: there is no run yet, and the
    * plan must not invent one. A supplied id is ignored, not returned.
+   * Live passes it as `--run`.
    */
   runId?: string
   /**
-   * Dry-run records this text. It is the planned worker answer, not a
-   * message id and not the human PR yes.
+   * Live calls require this. It is the desktop id of the message being
+   * answered (`--id`). Dry-run does not copy it. The adapter does not
+   * invent one.
+   */
+  messageId?: string
+  /**
+   * Dry-run records this text. Live passes it as `--body`. It is the planned
+   * worker answer, not a message id and not the human PR yes.
    */
   text: string
 }
 
 export interface GateCreateInput {
   /**
-   * Live calls require this. Dry-run does not: there is no run yet, and the
-   * plan must not invent one. A supplied id is ignored, not returned.
+   * Live calls require this. It is the task id from task-create, passed as
+   * `--task`. Desktop `gate-create` has no `--run`. Dry-run does not copy
+   * it. The adapter does not invent one.
    */
-  runId?: string
+  taskId?: string
   /**
-   * Dry-run records this reason. It is the planned backend gate, not a
-   * gate id and not the human PR yes.
+   * Dry-run records this reason. Live passes it as `--question`. It is the
+   * planned backend gate, not a gate id and not the human PR yes.
    */
   reason: string
 }

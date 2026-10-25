@@ -1,0 +1,1 @@
+Live spawn calls `orca orchestration <verb>` with the Orca desktop 1.4.240 flags. `status` stays top-level. `run-create` sends `--objective` only; repo and base stay on the dry-run plan and are not invented as CLI flags. A missing binary, a non-zero exit, or unparseable stdout still returns no id.

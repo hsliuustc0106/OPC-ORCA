@@ -56,9 +56,9 @@ test('normal path stops at the human PR gate and records no GitHub write', async
   assert.equal(snap.intents[0]?.args.goal, 'fix the gate')
   assert.equal(snap.intents[0]?.args.repo, repo)
   assert.equal(snap.intents[0]?.args.runId, undefined)
-  assert.equal(snap.intents[1]?.args.worker, 'dsh')
-  assert.equal(snap.intents[1]?.args.worktree, 'new-child')
-  assert.equal(snap.intents[1]?.args.title, 'fix the gate')
+  assert.equal(snap.intents[1]?.args.spec, 'fix the gate')
+  assert.equal(snap.intents[1]?.args.worker, undefined)
+  assert.equal(snap.intents[1]?.args.worktree, undefined)
   assert.equal(snap.intents[1]?.args.runId, undefined)
   assert.equal(snap.intents[2]?.args.worker, 'dsh')
   assert.equal(snap.intents[2]?.args.worktree, 'new-child')
@@ -168,8 +168,9 @@ test('dry-run waiting loop records the check plan and does not invent a run id',
     ['run-create', 'task-create', 'worker-start', 'check'],
   )
   assert.equal(adapter.planned[0]?.args.base, 'origin/main')
-  assert.equal(adapter.planned[1]?.args.worker, 'dsh')
-  assert.equal(adapter.planned[1]?.args.worktree, 'new-child')
+  assert.equal(adapter.planned[1]?.args.spec, 'fix the gate')
+  assert.equal(adapter.planned[1]?.args.worker, undefined)
+  assert.equal(adapter.planned[1]?.args.worktree, undefined)
   assert.equal(adapter.planned[2]?.args.worker, 'dsh')
   assert.equal(adapter.planned[2]?.args.worktree, 'new-child')
   assert.deepEqual(adapter.planned[3]?.args, { converged: 'false' })
@@ -312,7 +313,9 @@ test('live spawn failure does not advance the coordinator', async () => {
 
   const half = liveScript(`
 printf '%s\\n' "$@" >> "$log"
-case "$1" in
+cmd=$1
+if [ "$1" = orchestration ]; then cmd=$2; fi
+case "$cmd" in
   run-create) printf 'run-id: run-abc\\n' ;;
   *) printf 'not a field\\n' ;;
 esac
@@ -332,7 +335,9 @@ esac
 
 const liveProtocol = `
 printf '%s\\n' "$@" >> "$log"
-case "$1" in
+cmd=$1
+if [ "$1" = orchestration ]; then cmd=$2; fi
+case "$cmd" in
   run-create) printf 'run-id: run-abc\\n' ;;
   task-create) printf 'task-id: task-abc\\n' ;;
   worker-start) printf 'worker-id: worker-abc\\n' ;;
@@ -368,6 +373,10 @@ function argvGroups(log: string): string[][] {
   const groups: string[][] = []
   let current: string[] | null = null
   for (const line of log.trim().split('\n')) {
+    if (line === 'orchestration') {
+      current = null
+      continue
+    }
     if (commands.has(line)) {
       current = [line]
       groups.push(current)
@@ -403,7 +412,12 @@ test('a parsed live result advances the coordinator and still stops for a human'
   await loop.status()
   await loop.taskList()
   await loop.workerShow()
-  await loop.reply({ text: 'ship the tip' })
+  await assert.rejects(() => loop.reply({ text: 'ship the tip' }), /messageId is required/)
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().intents.some((intent) => intent.command === 'reply'), false)
+  await loop.reply({ text: 'ship the tip', messageId: 'msg-ask' })
+  assert.equal(loop.snapshot().intents.at(-1)?.args.messageId, 'msg-abc')
+  assert.notEqual(loop.snapshot().intents.at(-1)?.args.messageId, 'msg-ask')
   await loop.gateCreate({ reason: 'worker blocked' })
   await loop.gateResolve({ resolution: 'continue' })
   assert.equal(loop.state, 'waiting')
@@ -433,31 +447,39 @@ test('a parsed live result advances the coordinator and still stops for a human'
   assert.deepEqual(loop.snapshot().humanDecision, { answer: 'yes', action: 'open' })
 
   const groups = argvGroups(readFileSync(ok.log, 'utf8'))
-  assert.deepEqual(groups[0]?.slice(0, 7), [
-    'run-create',
-    '--goal',
-    'fix the gate',
-    '--repo',
-    repo,
-    '--base',
-    'origin/main',
+  assert.deepEqual(groups[0], ['run-create', '--objective', 'fix the gate'])
+  assert.deepEqual(groups[1], ['task-create', '--spec', 'fix the gate', '--run', 'run-abc'])
+  assert.equal(groups[1]?.includes('--worker'), false)
+  assert.equal(groups[1]?.includes('--agent'), false)
+  assert.deepEqual(groups[2], [
+    'worker-start',
+    '--task',
+    'task-abc',
+    '--agent',
+    'dsh',
+    '--worktree',
+    'new-child',
+    '--run',
+    'run-abc',
   ])
-  assert.deepEqual(groups[1]?.slice(0, 3), ['task-create', '--run-id', 'run-abc'])
-  assert.equal(groups[1]?.includes('--worker'), true)
-  assert.equal(groups[1]?.includes('dsh'), true)
-  assert.equal(groups[1]?.includes('new-child'), true)
-  assert.deepEqual(groups[2]?.slice(0, 3), ['worker-start', '--task-id', 'task-abc'])
-  assert.deepEqual(groups[3]?.slice(0, 3), ['check', '--run-id', 'run-abc'])
+  assert.deepEqual(groups[3]?.slice(0, 3), ['check', '--run', 'run-abc'])
   assert.equal(groups[3]?.includes('--converged'), false)
-  assert.equal(groups.some((group) => group[0] === 'gate-resolve' && group.includes('gate-abc')), true)
+  assert.equal(groups.some((group) => group[0] === 'reply' && group.includes('--id') && group.includes('msg-ask') && group.includes('--body')), true)
+  assert.equal(groups.some((group) => group[0] === 'gate-create' && group.includes('--task') && group.includes('task-abc') && group.includes('--question')), true)
+  assert.equal(groups.some((group) => group[0] === 'gate-resolve' && group.includes('--id') && group.includes('gate-abc')), true)
+  assert.equal(groups.some((group) => group.includes('--goal') || group.includes('--repo') || group.includes('--run-id') || group.includes(repo)), false)
   assert.equal(groups.some((group) => group.includes('run-supplied')), false)
-  assert.deepEqual(adapter.planned, [])
+  const raw = readFileSync(ok.log, 'utf8')
+  assert.match(raw, /^orchestration\nrun-create\n/)
+  assert.equal(adapter.planned.length, 0)
 })
 
 test('a non-zero live check does not advance and does not keep stdout ids', async () => {
   const crashed = liveScript(`
 printf '%s\\n' "$@" >> "$log"
-case "$1" in
+cmd=$1
+if [ "$1" = orchestration ]; then cmd=$2; fi
+case "$cmd" in
   run-create) printf 'run-id: run-ok\\n' ;;
   task-create) printf 'task-id: task-ok\\n' ;;
   worker-start) printf 'worker-id: worker-ok\\n' ;;
@@ -495,7 +517,9 @@ esac
 
 test('unparseable live check stdout does not advance', async () => {
   const garbled = liveScript(`
-case "$1" in
+cmd=$1
+if [ "$1" = orchestration ]; then cmd=$2; fi
+case "$cmd" in
   run-create) printf 'run-id: run-ok\\n' ;;
   task-create) printf 'task-id: task-ok\\n' ;;
   worker-start) printf 'worker-id: worker-ok\\n' ;;
@@ -567,7 +591,7 @@ function dispatchThen(check: OrcaAdapter['check']): OrcaAdapter {
       return {
         dryRun: true,
         command: 'task-create',
-        args: { title: 'fix the gate', worker: 'dsh', worktree: 'new-child' },
+        args: { spec: 'fix the gate' },
       }
     },
     async workerStart(): Promise<PlannedOrcaCall> {
