@@ -12,4 +12,14 @@ Dated lessons from real OPC-ORCA work. Read the open list before coding. Do not 
 
 ## Open lessons
 
-None yet.
+### 2026-10-25 — A colon in a plain `run:` step fails the workflow with 0 jobs
+
+Seen 1×
+
+**Seen:** `risk-tier.yml` and `review-gate.yml` failed on push before any job started. The annotation was an invalid workflow file at the `echo` line.
+
+**Trigger:** `run: echo "Phase0 report-only: ..."` The value is a plain scalar, so the quotes do not protect the colon-space.
+
+**Wrong:** Reading that as a failed step, or quoting only the message.
+
+**Right:** Put the script under `run: |`. Trigger these Phase 0 workflows on push and pull request so a valid file is a no-op success. Keep them report-only: `continue-on-error`, no `merge_group`, not a required check.

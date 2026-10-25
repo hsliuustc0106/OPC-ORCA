@@ -23,26 +23,56 @@ export interface RunCreateInput {
 }
 
 export interface TaskCreateInput {
-  runId: string
+  /**
+   * Live calls require this. Dry-run does not: there is no run yet, and the
+   * plan must not invent one. A supplied id is ignored, not returned.
+   */
+  runId?: string
   title: string
   worker?: OrcaWorker
   worktree?: OrcaWorktree
 }
 
 export interface WorkerStartInput {
-  taskId: string
+  /**
+   * Live calls require this. Dry-run does not take a task id and does not
+   * invent one. A supplied id is ignored, not returned.
+   */
+  taskId?: string
   worker?: OrcaWorker
   worktree?: OrcaWorktree
+}
+
+/** Commands a dry-run records. Other commands still reject. */
+export type PlannedOrcaCommand = 'run-create' | 'task-create' | 'worker-start'
+
+/**
+ * A plan, not a live Orca result. `dryRun` is always true. There is no run
+ * id, task id, or exit code on this object.
+ */
+export interface PlannedOrcaCall {
+  readonly dryRun: true
+  readonly command: PlannedOrcaCommand
+  readonly args: Readonly<Record<string, string>>
 }
 
 export interface OrcaAdapter {
   /** Absolute path of the resolved binary, or null when nothing is configured. */
   readonly executable: string | null
+  /** True only when this adapter was created with `dryRun`. */
+  readonly dryRun: boolean
+  /** Plans recorded by dry-run dispatch. Empty when `dryRun` is false. */
+  readonly planned: readonly PlannedOrcaCall[]
   status(): Promise<never>
-  runCreate(input: RunCreateInput): Promise<never>
-  taskCreate(input: TaskCreateInput): Promise<never>
+  /**
+   * Dry-run resolves a plan and does not require the CLI. Otherwise the
+   * promise rejects with not-configured or not-implemented and never
+   * resolves a run id.
+   */
+  runCreate(input: RunCreateInput): Promise<PlannedOrcaCall>
+  taskCreate(input: TaskCreateInput): Promise<PlannedOrcaCall>
   taskList(input: { runId: string }): Promise<never>
-  workerStart(input: WorkerStartInput): Promise<never>
+  workerStart(input: WorkerStartInput): Promise<PlannedOrcaCall>
   workerShow(input: { workerId: string }): Promise<never>
   workerRelease(input: { workerId: string }): Promise<never>
   check(input: { runId: string }): Promise<never>

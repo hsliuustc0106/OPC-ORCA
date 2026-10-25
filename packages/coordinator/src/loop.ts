@@ -1,3 +1,5 @@
+import { createOrcaAdapter, type OrcaAdapter, type PlannedOrcaCall } from '@opc-orca/orca-adapter'
+
 import { DuplicateVerdictError, IllegalTransitionError, InvalidVerdictError } from './errors.ts'
 import {
   DEFAULT_WORKER,
@@ -18,11 +20,21 @@ export interface DigLoop {
   triage(result: { agentReady: boolean; difficulty?: Difficulty; reason?: string }): void
   /** Easy tasks only. Skips Orca dispatch and lands in `converging`. */
   runDirect(): void
-  /** Normal tasks only. Records `run-create` and `task-create`. Does not call Orca. */
-  bindRun(): void
-  /** Records `worker-start` for dsh in a new-child worktree. Does not spawn a worker. */
-  startWorker(): void
-  /** Check loop. `converged: true` enters `converging`; otherwise stays in `waiting`. */
+  /**
+   * Normal tasks only. Calls the adapter for `run-create` and `task-create`.
+   * State guards throw before the promise. A dry-run plan is stored only
+   * after both calls resolve. A live rejection leaves the state on `plan`.
+   */
+  bindRun(): Promise<void>
+  /**
+   * Calls the adapter for `worker-start` (dsh, new-child). Does not spawn.
+   * A rejection leaves the state on `run_bound`.
+   */
+  startWorker(): Promise<void>
+  /**
+   * Check loop. `converged: true` enters `converging`; otherwise stays in `waiting`.
+   * Does not call adapter.check: a stub throw is not a converged tip.
+   */
   check(result: { converged: boolean }): void
   /** Stop for a human. Requires one verdict for `sha`. Does not open a pull request. */
   askHumanPr(input: { sha: string; verdict: Verdict }): void
@@ -52,7 +64,45 @@ function normalizeVerdict(verdict: Verdict, previous: Verdict | null): Verdict {
   return { outcome: verdict.outcome, sha, writtenBy }
 }
 
-export function createDigLoop(): DigLoop {
+export interface DigLoopOptions {
+  /**
+   * Adapter for normal-task dispatch. Default: dry-run, no binary required.
+   * A live adapter is called the same way and must reject; the loop does not
+   * invent a run id from that rejection.
+   */
+  adapter?: OrcaAdapter
+  /** Repository passed to run-create. Required before `bindRun`. */
+  repo?: string
+}
+
+const FABRICATED_ID = /^(runId|taskId|exitCode)$/
+
+function toIntent(call: PlannedOrcaCall): Intent {
+  return { command: call.command, args: { ...call.args } }
+}
+
+/** A dry-run plan is the only adapter result this loop may store. */
+function requireDryPlan(call: PlannedOrcaCall, command: PlannedOrcaCall['command']): void {
+  if (call.dryRun !== true || call.command !== command) {
+    throw new TypeError('refusing to treat an Orca result as success')
+  }
+  for (const key of Object.keys(call.args)) {
+    if (FABRICATED_ID.test(key)) throw new TypeError('refusing a fabricated Orca id')
+  }
+  if (command === 'run-create') {
+    if (call.args.base !== 'origin/main') {
+      throw new TypeError('dry-run run-create must record base origin/main')
+    }
+    return
+  }
+  if (call.args.worker !== DEFAULT_WORKER || call.args.worktree !== DEFAULT_WORKTREE) {
+    throw new TypeError('dry-run plan must use worker dsh and worktree new-child')
+  }
+}
+
+export function createDigLoop(options: DigLoopOptions = {}): DigLoop {
+  const adapter = options.adapter ?? createOrcaAdapter({ dryRun: true })
+  const repo = options.repo?.trim() ?? ''
   let state: DigState = 'intake'
   let goal: string | null = null
   let difficulty: Difficulty | null = null
@@ -62,6 +112,7 @@ export function createDigLoop(): DigLoop {
   let verdict: Verdict | null = null
   let humanDecision: HumanDecision | null = null
   let stopReason: string | null = null
+  let adapterBusy = false
 
   const need = (expected: readonly DigState[], action: string): void => {
     if (!expected.includes(state)) throw new IllegalTransitionError(state, action)
@@ -120,24 +171,53 @@ export function createDigLoop(): DigLoop {
         throw new IllegalTransitionError(state, 'bind an Orca run for an easy task')
       }
       if (!goal) throw new IllegalTransitionError(state, 'bind an Orca run without a goal')
-      path = 'orca-worker'
-      intents.push({ command: 'run-create', args: { goal, base: 'origin/main' } })
-      intents.push({
-        command: 'task-create',
-        args: { worker: DEFAULT_WORKER, worktree: DEFAULT_WORKTREE },
-      })
-      state = 'run_bound'
+      if (repo.length === 0) throw new TypeError('repo is required to bind an Orca run')
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'bind an Orca run while another adapter call is in flight')
+      }
+      const goalText = goal
+      adapterBusy = true
+      return (async () => {
+        try {
+          const run = await adapter.runCreate({ goal: goalText, repo, baseRef: 'origin/main' })
+          requireDryPlan(run, 'run-create')
+          const task = await adapter.taskCreate({
+            title: goalText,
+            worker: DEFAULT_WORKER,
+            worktree: DEFAULT_WORKTREE,
+          })
+          requireDryPlan(task, 'task-create')
+          path = 'orca-worker'
+          intents.push(toIntent(run), toIntent(task))
+          state = 'run_bound'
+        } finally {
+          adapterBusy = false
+        }
+      })()
     },
     startWorker() {
       need(['run_bound'], 'start a worker')
-      intents.push({
-        command: 'worker-start',
-        args: { worker: DEFAULT_WORKER, worktree: DEFAULT_WORKTREE },
-      })
-      state = 'dispatched'
+      if (adapterBusy) {
+        throw new IllegalTransitionError(state, 'start a worker while another adapter call is in flight')
+      }
+      adapterBusy = true
+      return (async () => {
+        try {
+          const started = await adapter.workerStart({
+            worker: DEFAULT_WORKER,
+            worktree: DEFAULT_WORKTREE,
+          })
+          requireDryPlan(started, 'worker-start')
+          intents.push(toIntent(started))
+          state = 'dispatched'
+        } finally {
+          adapterBusy = false
+        }
+      })()
     },
     check(result) {
       need(['dispatched', 'waiting'], 'check')
+      // Local flag only. adapter.check still throws, and that throw is not converged.
       intents.push({ command: 'check', args: { converged: result.converged ? 'true' : 'false' } })
       state = result.converged ? 'converging' : 'waiting'
     },

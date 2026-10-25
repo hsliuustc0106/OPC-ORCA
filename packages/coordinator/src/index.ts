@@ -1,6 +1,6 @@
 export { DuplicateVerdictError, IllegalTransitionError, InvalidVerdictError } from './errors.ts'
 export { createDigLoop } from './loop.ts'
-export type { DigLoop } from './loop.ts'
+export type { DigLoop, DigLoopOptions } from './loop.ts'
 export {
   DEFAULT_WORKER,
   DEFAULT_WORKTREE,

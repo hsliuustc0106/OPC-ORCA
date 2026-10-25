@@ -5,16 +5,28 @@ import type {
   OrcaCommand,
   OrcaWorker,
   OrcaWorktree,
+  PlannedOrcaCall,
+  PlannedOrcaCommand,
   RunCreateInput,
   TaskCreateInput,
   WorkerStartInput,
 } from './types.ts'
 
+export interface CreateOrcaAdapterOptions extends ResolveOptions {
+  /**
+   * Record planned run-create, task-create, and worker-start.
+   * Does not spawn and does not require the `orca` binary.
+   * Default false: those calls reject and never resolve an id.
+   */
+  dryRun?: boolean
+}
+
 /**
- * TODO(orca-cli): when a command is wired, spawn the resolved binary
+ * TODO(orca-cli): when a live command is wired, spawn the resolved binary
  * (`orca`, or `orca-ide` on Linux) as `[bin, command, …]` and parse its
  * stdout. Do not add a process spawn until that parser exists, and never
  * synthesize a run id, task id, gate id, or exit code 0.
+ * `dryRun` returns before that refusal and only for the three dispatch commands.
  */
 async function refuse(bin: string | null, platform: string, command: OrcaCommand): Promise<never> {
   if (!bin) {
@@ -30,8 +42,8 @@ async function refuse(bin: string | null, platform: string, command: OrcaCommand
   )
 }
 
-function required(value: string, label: string): void {
-  if (value.trim().length === 0) throw new TypeError(`${label} is required`)
+function required(value: string | undefined, label: string): void {
+  if (value === undefined || value.trim().length === 0) throw new TypeError(`${label} is required`)
 }
 
 function defaultWorker(worker: OrcaWorker | undefined, worktree: OrcaWorktree | undefined): void {
@@ -43,12 +55,36 @@ function defaultWorker(worker: OrcaWorker | undefined, worktree: OrcaWorktree | 
   }
 }
 
-export function createOrcaAdapter(options: ResolveOptions = {}): OrcaAdapter {
+function plan(
+  planned: PlannedOrcaCall[],
+  command: PlannedOrcaCommand,
+  args: Record<string, string>,
+): PlannedOrcaCall {
+  const call: PlannedOrcaCall = { dryRun: true, command, args: { ...args } }
+  planned.push(call)
+  return call
+}
+
+function dispatchArgs(worker: OrcaWorker | undefined, worktree: OrcaWorktree | undefined): Record<string, string> {
+  defaultWorker(worker, worktree)
+  return {
+    worker: worker ?? 'dsh',
+    worktree: worktree ?? 'new-child',
+  }
+}
+
+export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaAdapter {
+  const dryRun = options.dryRun === true
   const platform = options.platform ?? process.platform
   const executable = resolveOrcaExecutable({ env: options.env, platform })
+  const planned: PlannedOrcaCall[] = []
 
   return {
     executable,
+    dryRun,
+    get planned() {
+      return planned.map((call) => ({ dryRun: true as const, command: call.command, args: { ...call.args } }))
+    },
     async status() {
       return refuse(executable, platform, 'status')
     },
@@ -56,22 +92,37 @@ export function createOrcaAdapter(options: ResolveOptions = {}): OrcaAdapter {
       required(input.goal, 'goal')
       required(input.repo, 'repo')
       if (input.baseRef !== undefined) required(input.baseRef, 'baseRef')
-      return refuse(executable, platform, 'run-create')
+      if (!dryRun) return refuse(executable, platform, 'run-create')
+      const args: Record<string, string> = { goal: input.goal, repo: input.repo }
+      if (input.baseRef !== undefined) args.base = input.baseRef
+      return plan(planned, 'run-create', args)
     },
     async taskCreate(input: TaskCreateInput) {
-      required(input.runId, 'runId')
+      if (!dryRun) {
+        required(input.runId, 'runId')
+        required(input.title, 'title')
+        defaultWorker(input.worker, input.worktree)
+        return refuse(executable, platform, 'task-create')
+      }
       required(input.title, 'title')
-      defaultWorker(input.worker, input.worktree)
-      return refuse(executable, platform, 'task-create')
+      // runId is not copied. Dry-run must not look like a created run.
+      return plan(planned, 'task-create', {
+        title: input.title,
+        ...dispatchArgs(input.worker, input.worktree),
+      })
     },
     async taskList(input) {
       required(input.runId, 'runId')
       return refuse(executable, platform, 'task-list')
     },
     async workerStart(input: WorkerStartInput) {
-      required(input.taskId, 'taskId')
-      defaultWorker(input.worker, input.worktree)
-      return refuse(executable, platform, 'worker-start')
+      if (!dryRun) {
+        required(input.taskId, 'taskId')
+        defaultWorker(input.worker, input.worktree)
+        return refuse(executable, platform, 'worker-start')
+      }
+      // taskId is not copied. Dry-run must not look like a started worker.
+      return plan(planned, 'worker-start', dispatchArgs(input.worker, input.worktree))
     },
     async workerShow(input) {
       required(input.workerId, 'workerId')
