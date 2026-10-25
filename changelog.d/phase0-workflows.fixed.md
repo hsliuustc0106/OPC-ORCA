@@ -1,0 +1,1 @@
+Risk tier and review gate run as report-only no-ops on push and pull request. Their echo scripts are block scalars so a colon in the message cannot fail the workflow with zero jobs. They are still not required checks, and they do not enable a merge queue or auto-merge.

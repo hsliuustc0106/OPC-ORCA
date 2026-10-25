@@ -59,7 +59,7 @@ FlyBot roles collapse onto two processes here: the **coordinator** (intake, tria
 
 `Test` ([test.yml](../.github/workflows/test.yml)) checks out the repo, checks Node.js ≥ 22.19, and runs `npm test` when a test script exists. That is the only check this scaffold expects to go green.
 
-`Risk tier` and `Review gate` print `Phase0` and succeed even if a later step is red (`continue-on-error`). They must stay out of branch protection. They use the default token only if a future edit adds a checkout; the stub jobs do not check out the pull request and do not run its code.
+`Risk tier` and `Review gate` print `Phase0` and succeed even if a later step is red (`continue-on-error`). They run on push and pull request. They must stay out of branch protection. They use the default token only if a future edit adds a checkout; the stub jobs do not check out the pull request and do not run its code. The `run` script is a block scalar so a colon in the echo cannot make GitHub reject the file before any job starts.
 
 ## Not in this phase
 

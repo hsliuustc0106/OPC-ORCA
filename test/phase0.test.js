@@ -9,7 +9,24 @@ test('risk and review workflows are Phase0 report-only', () => {
     const text = readFileSync(`${workflowDir}/${name}`, 'utf8')
     assert.match(text, /Phase0/)
     assert.match(text, /continue-on-error:\s*true/)
+    assert.match(text, /push/)
+    assert.match(text, /pull_request/)
     assert.doesNotMatch(text, /pull_request_target/)
+  }
+})
+
+test('workflow run steps do not hide a colon-space in a plain scalar', () => {
+  const block = new Set(['|', '|-', '|+', '>', '>-', '>+'])
+  for (const name of readdirSync(workflowDir)) {
+    const lines = readFileSync(`${workflowDir}/${name}`, 'utf8').split('\n')
+    for (const line of lines) {
+      const match = /^(\s*)run:\s*(.*)$/.exec(line)
+      if (!match) continue
+      const value = match[2]
+      if (block.has(value)) continue
+      if (value.startsWith('"') || value.startsWith("'")) continue
+      assert.doesNotMatch(value, /: /, `${name} plain run scalar contains a colon-space`)
+    }
   }
 })
 

@@ -1,6 +1,6 @@
 # Coordinator workflow
 
-The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. The package records **intents** (the Orca command it would send). It does not send them. Wiring those intents to `packages/orca-adapter` is `WIRE_ADAPTER_TODO` on the coordinator package.
+The dig loop is a state machine in `packages/coordinator`. This page is the order of steps. Normal tasks call `packages/orca-adapter` in **dry-run** for `run-create`, `task-create`, and `worker-start`, and store that plan as intents. Dry-run does not spawn and does not need the `orca` binary. A live adapter call throws `not-configured` or `not-implemented`; the loop does not invent a run id or treat the throw as converged. Commands that are still only named, not called, stay on `WIRE_ADAPTER_TODO`.
 
 ```
 intake
@@ -38,16 +38,16 @@ Decide whether the goal is ready to dig.
 
 ### 4. Run-create and task-create (`run_bound`)
 
-Intents recorded, not executed:
+The coordinator calls the adapter with `dryRun`. The recorded plan is:
 
-- `run-create` — goal, base `origin/main`
+- `run-create` — goal, repo, base `origin/main`
 - `task-create` — worker `dsh`, worktree `new-child`
 
-`run_bound` means an Orca run is the *intended* parent of the task. v0 has no run id because the adapter was not called. Do not invent one.
+`run_bound` means an Orca run is the *intended* parent of the task. There is still no run id. Dry-run must not invent one. If the adapter throws, the state stays `plan` and no intent is stored.
 
 ### 5. Worker-start (`dispatched`)
 
-Intent: `worker-start` with worker `dsh` and worktree `new-child`.
+The coordinator calls the adapter's `worker-start` in dry-run with worker `dsh` and worktree `new-child`. No task id is invented. A throw leaves the state at `run_bound`.
 
 The child worktree is new for this task. It is not the coordinator’s checkout and not a worktree left over from another run.
 
@@ -95,4 +95,4 @@ Normal means Orca owns execution. The path is `plan` → `run_bound` → `dispat
 
 ## Adapter commands not used by this loop yet
 
-`status`, `task-list`, `worker-show`, `worker-release`, `reply`, `gate-create`, and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not record them. `gate-resolve` must not be used as a stand-in for the human PR yes.
+`status`, `task-list`, `worker-show`, `worker-release`, `check`, `reply`, `gate-create`, and `gate-resolve` are on the adapter so the CLI surface is complete. The dig loop does not call them. The `check` intent is still the caller's converged flag, not `adapter.check`. `gate-resolve` must not be used as a stand-in for the human PR yes.

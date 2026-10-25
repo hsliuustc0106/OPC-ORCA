@@ -2,8 +2,11 @@
   "name": "@opc-orca/coordinator",
   "version": "0.0.0",
   "private": true,
-  "description": "Dig-loop state machine. Stops at the human PR gate. Does not call Orca or GitHub.",
+  "description": "Dig-loop state machine. Stops at the human PR gate. Dry-run records an Orca plan and does not spawn or write to GitHub.",
   "type": "module",
+  "dependencies": {
+    "@opc-orca/orca-adapter": "0.0.0"
+  },
   "exports": {
     ".": "./src/index.ts"
   },

@@ -1,0 +1,1 @@
+Normal-task dispatch calls the Orca adapter in dry-run and records planned run-create, task-create, and worker-start for dsh in a new-child worktree. The plan does not need the orca binary and does not include a run id. A live call still throws not-configured or not-implemented.

@@ -53,7 +53,7 @@ The coordinator stub enforces one verdict per SHA and a non-empty `Written-by`. 
 ## Hard rules
 
 1. **Harness is the entrance.** Product code talks to DeepSeek Harness through the plugin API. Do not patch a Harness install.
-2. **Orca is the backend.** Run, Task, and Dispatch go through `packages/orca-adapter`. The adapter spawns `orca` when a later change wires it (on Linux the binary may be `orca-ide`). Until that wire exists, wrappers throw. They never return a made-up run id, task id, or exit 0.
+2. **Orca is the backend.** Run, Task, and Dispatch go through `packages/orca-adapter`. The adapter spawns `orca` when a later change wires it (on Linux the binary may be `orca-ide`). A dry-run records the planned `run-create`, `task-create`, and `worker-start` and does not need the binary. Any other call throws `not-configured` or `not-implemented`. Wrappers never return a made-up run id, task id, or exit 0.
 3. **No public GitHub write without a human yes** for that action (open, update, or merge). A chat message, a green check, or a `Verdict: PASS` is not that yes.
 4. **No merge queue and no auto-merge.** Do not add `merge_group` triggers, required merge checks, or `gh pr merge`.
 5. **No secrets** in the repo, the logs, or the prompt. Do not print tokens.
@@ -72,8 +72,8 @@ npm test
 ## Layout
 
 - `plugins/opc-orca/` — DSH plugin stub (`@opc-orca/plugin`). No tools.
-- `packages/coordinator/` — dig-loop state machine. Stops in `awaiting_human_pr`.
-- `packages/orca-adapter/` — typed Orca CLI surface. Throws `not-configured` or refuses to spawn.
+- `packages/coordinator/` — dig-loop state machine. Normal tasks drive the adapter in dry-run. Stops in `awaiting_human_pr`.
+- `packages/orca-adapter/` — typed Orca CLI surface. Dry-run records a plan. Otherwise throws `not-configured` or refuses to spawn.
 - `docs/` — architecture, the human gate, the coordinator steps.
 - `.github/workflows/test.yml` — the check that should stay green.
 - `.github/workflows/risk-tier.yml`, `review-gate.yml` — Phase 0 echoes. `continue-on-error`. Not required.

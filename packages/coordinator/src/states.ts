@@ -51,6 +51,6 @@ export interface DigSnapshot {
   stopReason: string | null
 }
 
-/** Worker and worktree recorded on normal-task intents. The adapter is not called. */
+/** Worker and worktree on normal-task dry-run plans. Live dispatch does not invent another pair. */
 export const DEFAULT_WORKER = 'dsh'
 export const DEFAULT_WORKTREE = 'new-child'
