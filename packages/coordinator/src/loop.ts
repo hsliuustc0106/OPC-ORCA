@@ -143,7 +143,7 @@ export interface DigLoopOptions {
    * `gate-create` and `gate-resolve` while waiting, and `worker-release`
    * after converging. Default: dry-run, no binary required, even if
    * `OPC_ORCA_LIVE=1` is set in the process environment. A live failure
-   * (`not-configured`, `not-implemented`, `spawn-failed`, `unparseable`)
+   * (`not-configured`, `not-implemented`, `no-sender`, `spawn-failed`, `unparseable`)
    * rejects and does not advance state. A parsed live result stores the
    * ids, status, and converged flag from that result and advances the same
    * states as a dry-run plan. The loop does not invent a run id or a gate

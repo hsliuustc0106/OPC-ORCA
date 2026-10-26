@@ -6,6 +6,8 @@ import type { Difficulty, DigPath, DigState, HumanDecision, Intent } from './sta
 export interface DigEnv {
   PATH?: string | undefined
   OPC_ORCA_LIVE?: string | undefined
+  /** Coordinator terminal handle. Used only when this dig is live. */
+  ORCA_TERMINAL_HANDLE?: string | undefined
 }
 
 export interface DigRequest {
@@ -30,8 +32,14 @@ export interface DigRequest {
    * A live check ignores this and uses stdout `converged:`.
    */
   converged?: boolean
-  /** Lookup for `PATH` and `OPC_ORCA_LIVE`. When set, `process.env` is not read. */
+  /** Lookup for `PATH`, `OPC_ORCA_LIVE`, and `ORCA_TERMINAL_HANDLE`. When set, `process.env` is not read. */
   env?: DigEnv
+  /**
+   * Coordinator terminal handle. Wins over `env.ORCA_TERMINAL_HANDLE`.
+   * A blank string is absent. Live sender verbs fail closed without one.
+   * This is not a tool-caller field: the plugin forwards operator config only.
+   */
+  from?: string
   platform?: string
 }
 
@@ -89,6 +97,9 @@ export async function runDig(request: DigRequest): Promise<DigSummary> {
   if (request.converged !== undefined && typeof request.converged !== 'boolean') {
     throw new TypeError('converged must be true or false')
   }
+  if (request.from !== undefined && typeof request.from !== 'string') {
+    throw new TypeError('from must be a string')
+  }
   const repo = typeof request.repo === 'string' ? request.repo.trim() : ''
   let difficulty = request.difficulty
   if (difficulty === undefined) difficulty = repo.length > 0 ? 'normal' : 'easy'
@@ -102,6 +113,7 @@ export async function runDig(request: DigRequest): Promise<DigSummary> {
   const adapterOptions: CreateOrcaAdapterOptions = {}
   if (env !== undefined) adapterOptions.env = env
   if (platform !== undefined) adapterOptions.platform = platform
+  if (request.from !== undefined) adapterOptions.from = request.from
   const adapter = live
     ? createOrcaAdapter({ ...adapterOptions, live: true })
     : createOrcaAdapter({ ...adapterOptions, dryRun: true })

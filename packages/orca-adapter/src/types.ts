@@ -231,14 +231,15 @@ export interface OrcaAdapter {
    * Dry-run resolves a plan and does not require the CLI. The plan has no
    * run id and no status payload. With live off, the promise rejects with
    * not-configured or not-implemented. With live on, it spawns and rejects
-   * with not-configured, spawn-failed, or unparseable instead of inventing
-   * a status payload.
+   * with not-configured, no-sender, spawn-failed, or unparseable instead of
+   * inventing a status payload or a terminal handle.
    */
   status(input?: StatusInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI. With live off, the
-   * promise rejects and never resolves a run id. With live on, a run id is
-   * returned only when stdout prints `run-id:`.
+   * promise rejects and never resolves a run id. With live on, a missing
+   * coordinator terminal handle rejects with no-sender before spawn, and a
+   * run id is returned only when stdout prints `run-id:`.
    */
   runCreate(input: RunCreateInput): Promise<OrcaCallResult>
   taskCreate(input: TaskCreateInput): Promise<OrcaCallResult>

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { OrcaNotConfiguredError } from '@opc-orca/orca-adapter'
+import { OrcaNoSenderError, OrcaNotConfiguredError } from '@opc-orca/orca-adapter'
 
 import { operatorAllowsLive, runDig } from '../src/index.ts'
 
@@ -134,9 +134,91 @@ test('operator env on tries to spawn and does not invent a summary', async () =>
   assert.notEqual(easy.state, 'awaiting_human_pr')
 })
 
+const liveProtocol = `
+printf '%s\\n' "$@" >> "$log"
+cmd=$1
+if [ "$1" = orchestration ]; then cmd=$2; fi
+case "$cmd" in
+  run-create) printf 'run-id: run-abc\\n' ;;
+  task-create) printf 'task-id: task-abc\\n' ;;
+  worker-start) printf 'worker-id: worker-abc\\n' ;;
+  check) printf 'converged: false\\n' ;;
+  *) printf 'unknown\\n' >&2; exit 1 ;;
+esac
+`
+
+function liveBin(): { dir: string; log: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), 'orca-dig-live-'))
+  const log = path.join(dir, 'spawn.log')
+  const file = path.join(dir, 'orca')
+  writeFileSync(file, `#!/bin/sh\nlog=${JSON.stringify(log)}\n${liveProtocol}\n`)
+  chmodSync(file, 0o755)
+  return { dir, log }
+}
+
+test('live dig without a terminal handle fails closed and does not spawn', async () => {
+  const bin = touchBin()
+  await assert.rejects(
+    () =>
+      runDig({
+        goal: 'fix the gate',
+        repo,
+        env: { PATH: bin.dir, OPC_ORCA_LIVE: '1' },
+        platform: 'linux',
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaNoSenderError)
+      assert.equal(error.code, 'no-sender')
+      assert.equal(JSON.stringify(error).includes('term_'), false)
+      return true
+    },
+  )
+  assert.equal(existsSync(bin.log), false)
+})
+
+test('live dig passes --from from the env and from overrides it', async () => {
+  const envBin = liveBin()
+  const summary = await runDig({
+    goal: 'fix the gate',
+    repo,
+    env: { PATH: envBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env' },
+    platform: 'linux',
+  })
+  assert.equal(summary.live, true)
+  assert.equal(summary.state, 'waiting')
+  assert.equal(summary.path, 'orca-worker')
+  assert.equal(summary.githubWritePerformed, false)
+  assert.equal(summary.humanDecision, null)
+  assert.notEqual(summary.state, 'awaiting_human_pr')
+  assert.equal(summary.intents[0]?.args.runId, 'run-abc')
+  const envLog = readFileSync(envBin.log, 'utf8')
+  assert.match(envLog, /--from\nterm_env\n/)
+  assert.match(envLog, /--terminal\nterm_env\n/)
+  assert.equal(envLog.includes('--terminal\nterm_env') && envLog.includes('check\n'), true)
+
+  const fromBin = liveBin()
+  const overridden = await runDig({
+    goal: 'fix the gate',
+    repo,
+    from: 'term_config',
+    env: { PATH: fromBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env' },
+    platform: 'linux',
+  })
+  assert.equal(overridden.state, 'waiting')
+  assert.equal(overridden.githubWritePerformed, false)
+  const fromLog = readFileSync(fromBin.log, 'utf8')
+  assert.match(fromLog, /--from\nterm_config\n/)
+  assert.equal(fromLog.includes('term_env'), false)
+  assert.match(fromLog, /--terminal\nterm_config\n/)
+})
+
 test('configLive must be boolean', async () => {
   await assert.rejects(
     () => runDig({ goal: 'fix the gate', configLive: 'false' as unknown as boolean }),
     /configLive/,
+  )
+  await assert.rejects(
+    () => runDig({ goal: 'fix the gate', from: 1 as unknown as string }),
+    /from must be a string/,
   )
 })

@@ -24,6 +24,20 @@ export class OrcaStubError extends Error {
 }
 
 /**
+ * Live spawn was about to call a verb that needs a coordinator terminal,
+ * and neither `from` nor `ORCA_TERMINAL_HANDLE` supplied a handle.
+ * Nothing was spawned. This error has no run id and no invented handle.
+ */
+export class OrcaNoSenderError extends Error {
+  readonly code = 'no-sender' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'OrcaNoSenderError'
+  }
+}
+
+/**
  * The live CLI was spawned and did not exit 0, or the process could not be
  * started for a reason other than a missing binary. Stdout is not parsed
  * into ids. This error has no run id.

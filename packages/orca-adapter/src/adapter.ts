@@ -1,5 +1,5 @@
-import { orcaCliArgs, orcaCommandHead, ORCA_CLI, type OrcaFlagName } from './cli.ts'
-import { OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
+import { orcaCliArgs, orcaCommandHead, ORCA_CLI, ORCA_SENDER_FLAG, type OrcaFlagName } from './cli.ts'
+import { OrcaNoSenderError, OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
 import { parseLiveStdout } from './parse.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
 import { spawnOrca } from './spawn.ts'
@@ -46,6 +46,14 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
    * (Orca desktop 1.4.240). This file must call `orcaCliArgs`.
    */
   live?: boolean
+  /**
+   * Coordinator terminal handle for live sender verbs. Wins over
+   * `ORCA_TERMINAL_HANDLE` when this string has a non-empty trim.
+   * A blank value is absent. Live verbs in `ORCA_SENDER_FLAG` refuse
+   * to spawn when no handle remains. This adapter does not invent one.
+   * Dry-run does not read it and does not record it.
+   */
+  from?: string
 }
 
 type Flag = readonly [OrcaFlagName, string]
@@ -84,6 +92,45 @@ function plan(
   const call: PlannedOrcaCall = { dryRun: true, command, args: { ...args } }
   planned.push(call)
   return call
+}
+
+/** A real Orca handle is one token (`term_…`). Anything else is not rewritten. */
+const HANDLE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
+
+function coordinatorHandle(options: CreateOrcaAdapterOptions): string | undefined {
+  if (typeof options.from === 'string' && options.from.trim().length > 0) {
+    return handleToken(options.from.trim(), 'from')
+  }
+  const env = options.env ?? process.env
+  const raw = env.ORCA_TERMINAL_HANDLE
+  if (typeof raw !== 'string' || raw.trim().length === 0) return undefined
+  return handleToken(raw.trim(), 'ORCA_TERMINAL_HANDLE')
+}
+
+function handleToken(handle: string, source: string): string {
+  if (!HANDLE_TOKEN.test(handle)) {
+    throw new OrcaNoSenderError(
+      `coordinator terminal handle from ${source} is not a single token. Refusing to invent one.`,
+    )
+  }
+  return handle
+}
+
+function senderFlag(command: OrcaCommand): OrcaFlagName | undefined {
+  if (!Object.hasOwn(ORCA_SENDER_FLAG, command)) return undefined
+  return ORCA_SENDER_FLAG[command as keyof typeof ORCA_SENDER_FLAG]
+}
+
+function withSender(options: CreateOrcaAdapterOptions, command: OrcaCommand, flags: readonly Flag[]): Flag[] {
+  const sender = senderFlag(command)
+  const handle = coordinatorHandle(options)
+  if (sender === undefined) return [...flags]
+  if (handle === undefined) {
+    throw new OrcaNoSenderError(
+      `live ${command} needs a coordinator terminal handle. Set ORCA_TERMINAL_HANDLE or pass from. Refusing to invent one.`,
+    )
+  }
+  return [...flags, [sender, handle]]
 }
 
 function dispatchArgs(worker: OrcaWorker | undefined, worktree: OrcaWorktree | undefined): Record<string, string> {
@@ -125,7 +172,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
 
   async function runLive(command: OrcaCommand, flags: readonly Flag[]): Promise<LiveOrcaCall> {
     if (!executable) notConfigured(command)
-    const args = orcaCliArgs(command, flags)
+    const args = orcaCliArgs(command, withSender(options, command, flags))
     const argv = [executable, ...args]
     let spawned
     try {
@@ -181,7 +228,8 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
       const baseRef = input.baseRef === undefined ? undefined : required(input.baseRef, 'baseRef')
       const command = ORCA_CLI.commands.runCreate
       // repo and baseRef are the product binding, recorded on the dry-run plan.
-      // Orca 1.4.240 run-create accepts the objective flag only. Do not pass them.
+      // Orca 1.4.240 run-create accepts the objective flag. The sender flag
+      // is added for live spawn only. Do not pass repo or base as flags.
       const flags: Flag[] = [[ORCA_CLI.flags.objective, goal]]
       return dispatch(command, flags, () => {
         const args: Record<string, string> = { goal, repo }

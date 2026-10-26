@@ -1,0 +1,1 @@
+Live sender verbs pass the coordinator terminal handle as `--from` (check uses `--terminal`). The handle is `ORCA_TERMINAL_HANDLE` or adapter `from`. When live is on and no handle is available, those verbs throw `no-sender` and do not invent one. Dry-run and `awaiting_human_pr` are unchanged.

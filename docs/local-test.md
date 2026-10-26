@@ -65,15 +65,40 @@ A passing dry-run prints `PASS:` lines and ends with `PASS: smoke-local dry-run`
 
 The script also calls the normal dig with caller `live: true` and an empty `PATH`, and requires that call to stay on dry-run. That is the operator-switch check.
 
+## Coordinator terminal handle
+
+Orca desktop 1.4.240 will not accept a live sender verb from outside an Orca pane unless you name the coordinator terminal. The verbs that require it are `run-create`, `task-create`, `worker-start`, `reply`, `gate-create`, and `gate-resolve` (`--from`), and `check` (`--terminal` for that same handle, not `--from`). `worker-start --terminal` is a worker target. This adapter does not pass it. `status`, `task-list`, `worker-show`, and `worker-release` do not take a sender on this adapter.
+
+The handle is `ORCA_TERMINAL_HANDLE`, or adapter / plugin config `from` when that string is non-blank (`from` wins). A blank value is absent. Nothing in this repo invents a `term_…` handle.
+
+Obtain one in either of these ways:
+
+1. Run the smoke from an Orca terminal. That pane sets `ORCA_TERMINAL_HANDLE`.
+2. After this repo’s worktree is registered in Orca, from that worktree:
+
+   ```sh
+   orca terminal create
+   ```
+
+   The prose line is `Created terminal term_…`. Export that handle:
+
+   ```sh
+   export ORCA_TERMINAL_HANDLE=term_…
+   ```
+
+   Registering the worktree is an operator step. This repo does not do it.
+
 ## Live, after dry-run passes
 
-Turn on the Orca desktop settings above, confirm `command -v orca`, then:
+Turn on the Orca desktop settings above, confirm `command -v orca`, set the handle, then:
 
 ```sh
 OPC_ORCA_LIVE=1 npm run smoke:local -- --live
 ```
 
 Both flags are required. `--live` alone exits nonzero and does not spawn. `OPC_ORCA_LIVE=1` alone, without `--live`, runs the dry-run section only.
+
+If `--live` is set and `OPC_ORCA_LIVE=1` but no handle is set, the script still runs the easy live dig (coordinator-direct, no spawn), prints `SKIP:` for the normal live dig, and exits 0. It does not spawn `run-create`.
 
 The live section runs the same two goals:
 
@@ -82,7 +107,7 @@ The live section runs the same two goals:
 
 The dry-run half already proved the stop at `awaiting_human_pr`. A live parse advances the same states and still stops there once a verdict is recorded. The live half does not record that verdict and does not answer open, update, or merge.
 
-A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. The adapter does not invent a run id. Compare the desktop CLI with the checklist below before changing a spelling.
+A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. A live sender verb with no handle is `no-sender` before spawn when the script does not skip it. The adapter does not invent a run id or a terminal handle. Compare the desktop CLI with the checklist below before changing a spelling. Desktop success text such as `Run run_… created and bound: …` is still outside the line protocol in `parse.ts`, so a live `run-create` that gets past the sender check can still fail closed as unparseable. This tip does not fill an id from that prose.
 
 ## Confirm the CLI spellings
 
@@ -90,21 +115,21 @@ Subcommands and flag names are only in [`packages/orca-adapter/src/cli.ts`](../p
 
 ```
 [x] status
-[x] orchestration run-create --objective
-[x] orchestration task-create --spec --run
+[x] orchestration run-create --objective --from
+[x] orchestration task-create --spec --run --from
 [x] orchestration task-list --run
-[x] orchestration worker-start --task --agent --worktree --run
+[x] orchestration worker-start --task --agent --worktree --run --from
 [x] orchestration worker-show --dispatch
 [x] orchestration worker-release --dispatch
-[x] orchestration check --run
-[x] orchestration reply --id --body --run
-[x] orchestration gate-create --task --question
-[x] orchestration gate-resolve --id --resolution
+[x] orchestration check --run --terminal
+[x] orchestration reply --id --body --run --from
+[x] orchestration gate-create --task --question --from
+[x] orchestration gate-resolve --id --resolution --from
 ```
 
-Bindings the adapter passes: goal text is `--objective`; the task spec is `--spec` (not `--task-title`); a parsed run id is `--run`; a parsed task id is `--task`; worker `dsh` is `--agent` (in-repo docs name that agent `dsh`); worktree `new-child` is `--worktree`; the worker id from stdout is `--dispatch`; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`.
+Bindings the adapter passes: goal text is `--objective`; the task spec is `--spec` (not `--task-title`); a parsed run id is `--run`; a parsed task id is `--task`; worker `dsh` is `--agent` (in-repo docs name that agent `dsh`); worktree `new-child` is `--worktree`; the worker id from stdout is `--dispatch`; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`; the coordinator terminal handle is `--from` on those sender verbs and `--terminal` on `check`.
 
-Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo` or `--base-branch`. `--json` is not passed. Live `reply` refuses when the caller did not supply a message id.
+Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo`, `--base-branch`, or `--terminal`. `task-list` does not pass `--from`. `check` does not pass `--from`. `--json` is not passed. Live `reply` refuses when the caller did not supply a message id. A live sender verb refuses when no handle was supplied.
 
 The stdout line protocol (`run-id:`, `task-id:`, `worker-id:`, and the other keys in `parse.ts`) was not part of that help confirm. Output that is not that protocol is unparseable. Do not paper over a failed parse by filling in an id.
 

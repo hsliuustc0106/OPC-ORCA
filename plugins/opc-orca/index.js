@@ -10,7 +10,8 @@
  * @param {unknown} ctx
  * @param {{
  *   live?: boolean,
- *   env?: { PATH?: string, OPC_ORCA_LIVE?: string },
+ *   from?: string,
+ *   env?: { PATH?: string, OPC_ORCA_LIVE?: string, ORCA_TERMINAL_HANDLE?: string },
  * }} [config]
  * @returns {() => void}
  */
@@ -78,6 +79,7 @@ export function apply(ctx, config = {}) {
         converged: typeof input.converged === 'boolean' ? input.converged : undefined,
         live: typeof input.live === 'boolean' ? input.live : undefined,
         configLive: typeof config.live === 'boolean' ? config.live : undefined,
+        from: typeof config.from === 'string' ? config.from : undefined,
         env: config.env,
       })
     },
