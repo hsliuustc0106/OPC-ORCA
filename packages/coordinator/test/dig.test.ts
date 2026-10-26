@@ -134,15 +134,20 @@ test('operator env on tries to spawn and does not invent a summary', async () =>
   assert.notEqual(easy.state, 'awaiting_human_pr')
 })
 
+function emit(result: unknown): string {
+  const payload = JSON.stringify({ ok: true, id: 'rpc_envelope', result })
+  return `printf '%s\\n' ${JSON.stringify(payload)}`
+}
+
 const liveProtocol = `
 printf '%s\\n' "$@" >> "$log"
 cmd=$1
 if [ "$1" = orchestration ]; then cmd=$2; fi
 case "$cmd" in
-  run-create) printf 'run-id: run-abc\\n' ;;
-  task-create) printf 'task-id: task-abc\\n' ;;
-  worker-start) printf 'worker-id: worker-abc\\n' ;;
-  check) printf 'converged: false\\n' ;;
+  run-create) ${emit({ run: { id: 'run-abc' } })} ;;
+  task-create) ${emit({ task: { id: 'task-abc', status: 'open' } })} ;;
+  worker-start) ${emit({ dispatchId: 'worker-abc', state: 'ready' })} ;;
+  check) ${emit({ messages: [], count: 0 })} ;;
   *) printf 'unknown\\n' >&2; exit 1 ;;
 esac
 `
@@ -192,8 +197,8 @@ test('live dig passes --from from the env and from overrides it', async () => {
   assert.notEqual(summary.state, 'awaiting_human_pr')
   assert.equal(summary.intents[0]?.args.runId, 'run-abc')
   const envLog = readFileSync(envBin.log, 'utf8')
-  assert.match(envLog, /--from\nterm_env\n/)
-  assert.match(envLog, /--terminal\nterm_env\n/)
+  assert.match(envLog, /--from\nterm_env\n--json\n/)
+  assert.match(envLog, /--terminal\nterm_env\n--json\n/)
   assert.equal(envLog.includes('--terminal\nterm_env') && envLog.includes('check\n'), true)
 
   const fromBin = liveBin()
@@ -207,9 +212,9 @@ test('live dig passes --from from the env and from overrides it', async () => {
   assert.equal(overridden.state, 'waiting')
   assert.equal(overridden.githubWritePerformed, false)
   const fromLog = readFileSync(fromBin.log, 'utf8')
-  assert.match(fromLog, /--from\nterm_config\n/)
+  assert.match(fromLog, /--from\nterm_config\n--json\n/)
   assert.equal(fromLog.includes('term_env'), false)
-  assert.match(fromLog, /--terminal\nterm_config\n/)
+  assert.match(fromLog, /--terminal\nterm_config\n--json\n/)
 })
 
 test('configLive must be boolean', async () => {

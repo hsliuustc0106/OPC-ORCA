@@ -56,8 +56,9 @@ export class OrcaSpawnError extends Error {
 }
 
 /**
- * The process exited 0 and stdout was not the line protocol for that command.
- * No id is filled in from the caller or from a partial line.
+ * The process exited 0 and stdout was not the `--json` envelope for that
+ * command. No id is filled in from the caller, from prose, or from the
+ * envelope `id`.
  */
 export class OrcaParseError extends Error {
   readonly code = 'unparseable' as const

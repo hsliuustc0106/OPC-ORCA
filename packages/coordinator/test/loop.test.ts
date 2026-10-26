@@ -273,6 +273,11 @@ function liveEnv(dir: string): { PATH: string; ORCA_TERMINAL_HANDLE: string } {
   return { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE }
 }
 
+function emit(result: unknown): string {
+  const payload = JSON.stringify({ ok: true, id: 'rpc_envelope', result })
+  return `printf '%s\\n' ${JSON.stringify(payload)}`
+}
+
 function liveScript(body: string): { dir: string; log: string } {
   const dir = mkdtempSync(path.join(tmpdir(), 'orca-live-loop-'))
   const log = path.join(dir, 'spawn.log')
@@ -324,8 +329,8 @@ printf '%s\\n' "$@" >> "$log"
 cmd=$1
 if [ "$1" = orchestration ]; then cmd=$2; fi
 case "$cmd" in
-  run-create) printf 'run-id: run-abc\\n' ;;
-  *) printf 'not a field\\n' ;;
+  run-create) ${emit({ run: { id: 'run-abc' } })} ;;
+  *) printf 'Run run_57808dafd589 created and bound: smoke parse sample\\n' ;;
 esac
 `)
   const halfAdapter = createOrcaAdapter({ live: true, env: liveEnv(half.dir), platform: 'linux' })
@@ -346,20 +351,17 @@ printf '%s\\n' "$@" >> "$log"
 cmd=$1
 if [ "$1" = orchestration ]; then cmd=$2; fi
 case "$cmd" in
-  run-create) printf 'run-id: run-abc\\n' ;;
-  task-create) printf 'task-id: task-abc\\n' ;;
-  worker-start) printf 'worker-id: worker-abc\\n' ;;
-  worker-show) printf 'worker-id: worker-abc\\n' ;;
-  worker-release) printf 'worker-id: worker-abc\\n' ;;
-  check)
-    count=$(grep -c '^check$' "$log")
-    if [ "$count" -le 1 ]; then printf 'converged: false\\n'; else printf 'converged: true\\n'; fi
-    ;;
-  status) printf 'status: waiting\\n' ;;
-  task-list) printf 'tasks: none\\n' ;;
-  reply) printf 'message-id: msg-abc\\n' ;;
-  gate-create) printf 'gate-id: gate-abc\\n' ;;
-  gate-resolve) printf 'gate-id: gate-done\\n' ;;
+  run-create) ${emit({ run: { id: 'run-abc' } })} ;;
+  task-create) ${emit({ task: { id: 'task-abc', status: 'open' } })} ;;
+  worker-start) ${emit({ dispatchId: 'worker-abc', state: 'ready' })} ;;
+  worker-show) ${emit({ dispatch: { id: 'worker-abc' } })} ;;
+  worker-release) ${emit({ dispatchId: 'worker-abc' })} ;;
+  check) ${emit({ messages: [{ type: 'worker_done' }], count: 1, converged: true })} ;;
+  status) ${emit({ runtime: { state: 'ready' } })} ;;
+  task-list) ${emit({ tasks: [], count: 0 })} ;;
+  reply) ${emit({ message: { id: 'msg-abc' } })} ;;
+  gate-create) ${emit({ gate: { id: 'gate-abc' } })} ;;
+  gate-resolve) ${emit({ gate: { id: 'gate-done' } })} ;;
   *) printf 'unknown\\n' >&2; exit 1 ;;
 esac
 `
@@ -454,32 +456,27 @@ test('a parsed live result advances the coordinator and still stops for a human'
   assert.equal(loop.state, 'waiting')
   assert.equal(loop.snapshot().humanDecision, null)
   assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
-  assert.equal(loop.snapshot().intents.at(-6)?.args.status, 'waiting')
-  assert.deepEqual(loop.snapshot().intents.at(-5)?.args, { tasks: 'none' })
-  assert.deepEqual(loop.snapshot().intents.at(-4)?.args, { workerId: 'worker-abc' })
-  assert.deepEqual(loop.snapshot().intents.at(-3)?.args, { messageId: 'msg-abc' })
-  assert.deepEqual(loop.snapshot().intents.at(-2)?.args, { gateId: 'gate-abc' })
-  assert.deepEqual(loop.snapshot().intents.at(-1)?.args, { gateId: 'gate-done' })
+  assert.equal(loop.snapshot().intents[4]?.args.status, 'ready')
+  assert.deepEqual(loop.snapshot().intents[5]?.args, { tasks: '0' })
+  assert.deepEqual(loop.snapshot().intents[6]?.args, { workerId: 'worker-abc' })
+  assert.deepEqual(loop.snapshot().intents[7]?.args, { messageId: 'msg-abc' })
+  assert.deepEqual(loop.snapshot().intents[8]?.args, { gateId: 'gate-abc' })
+  assert.deepEqual(loop.snapshot().intents[9]?.args, { gateId: 'gate-done' })
 
-  await loop.check({ converged: false })
-  assert.equal(loop.state, 'converging')
-  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'true')
+  await loop.check({ converged: true })
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.converged, 'false')
+  assert.equal(loop.snapshot().intents.at(-1)?.args.runId, undefined)
+  assert.throws(() => loop.workerRelease(), IllegalTransitionError)
+  assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+  assert.equal(loop.state, 'waiting')
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.equal(loop.snapshot().humanDecision, null)
   assert.notEqual(loop.state, 'awaiting_human_pr')
-  await loop.workerRelease()
-  assert.equal(loop.state, 'converging')
-  assert.deepEqual(loop.snapshot().intents.at(-1)?.args, { workerId: 'worker-abc' })
-  assert.equal(loop.snapshot().githubWritePerformed, false)
-
-  loop.askHumanPr({ sha: 'abc123', verdict })
-  assert.equal(loop.state, 'awaiting_human_pr')
-  loop.humanPrDecision('yes', 'open')
-  assert.equal(loop.state, 'done')
-  assert.equal(loop.snapshot().githubWritePerformed, false)
-  assert.deepEqual(loop.snapshot().humanDecision, { answer: 'yes', action: 'open' })
 
   const groups = argvGroups(readFileSync(ok.log, 'utf8'))
-  assert.deepEqual(groups[0], ['run-create', '--objective', 'fix the gate', '--from', HANDLE])
-  assert.deepEqual(groups[1], ['task-create', '--spec', 'fix the gate', '--run', 'run-abc', '--from', HANDLE])
+  assert.deepEqual(groups[0], ['run-create', '--objective', 'fix the gate', '--from', HANDLE, '--json'])
+  assert.deepEqual(groups[1], ['task-create', '--spec', 'fix the gate', '--run', 'run-abc', '--from', HANDLE, '--json'])
   assert.equal(groups[1]?.includes('--worker'), false)
   assert.equal(groups[1]?.includes('--agent'), false)
   assert.deepEqual(groups[2], [
@@ -494,9 +491,10 @@ test('a parsed live result advances the coordinator and still stops for a human'
     'run-abc',
     '--from',
     HANDLE,
+    '--json',
   ])
   assert.equal(groups[2]?.includes('--terminal'), false)
-  assert.deepEqual(groups[3], ['check', '--run', 'run-abc', '--terminal', HANDLE])
+  assert.deepEqual(groups[3], ['check', '--run', 'run-abc', '--terminal', HANDLE, '--json'])
   assert.equal(groups[3]?.includes('--from'), false)
   assert.equal(groups[3]?.includes('--converged'), false)
   assert.equal(groups.some((group) => group[0] === 'reply' && group.includes('--id') && group.includes('msg-ask') && group.includes('--body')), true)
@@ -515,10 +513,10 @@ printf '%s\\n' "$@" >> "$log"
 cmd=$1
 if [ "$1" = orchestration ]; then cmd=$2; fi
 case "$cmd" in
-  run-create) printf 'run-id: run-ok\\n' ;;
-  task-create) printf 'task-id: task-ok\\n' ;;
-  worker-start) printf 'worker-id: worker-ok\\n' ;;
-  check) printf 'run-id: run-nope\\n'; exit 5 ;;
+  run-create) ${emit({ run: { id: 'run-ok' } })} ;;
+  task-create) ${emit({ task: { id: 'task-ok' } })} ;;
+  worker-start) ${emit({ dispatchId: 'worker-ok', state: 'ready' })} ;;
+  check) ${emit({ messages: [], count: 0, runId: 'run-nope' })}; exit 5 ;;
   *) exit 1 ;;
 esac
 `)
@@ -555,9 +553,9 @@ test('unparseable live check stdout does not advance', async () => {
 cmd=$1
 if [ "$1" = orchestration ]; then cmd=$2; fi
 case "$cmd" in
-  run-create) printf 'run-id: run-ok\\n' ;;
-  task-create) printf 'task-id: task-ok\\n' ;;
-  worker-start) printf 'worker-id: worker-ok\\n' ;;
+  run-create) ${emit({ run: { id: 'run-ok' } })} ;;
+  task-create) ${emit({ task: { id: 'task-ok' } })} ;;
+  worker-start) ${emit({ dispatchId: 'worker-ok', state: 'ready' })} ;;
   check) printf 'converged: maybe\\n' ;;
   *) exit 1 ;;
 esac

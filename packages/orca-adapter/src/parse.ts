@@ -2,58 +2,60 @@ import { OrcaParseError } from './errors.ts'
 import type { LiveOrcaIds, OrcaCommand } from './types.ts'
 
 /**
- * Line protocol for live stdout. One field per line: `key: value`.
- * Values are tokens. `converged` must be `true` or `false`.
- * Unknown lines, duplicates, and a missing required field throw.
- * Nothing in here copies an id from the caller's arguments.
+ * Live stdout is the Orca desktop 1.4.240 `--json` envelope:
+ * `{ ok: true, result, … }`. Pretty-printed or compact JSON both parse.
+ * The envelope `id` and `_meta` are not a run, task, worker, message, or
+ * gate id. Extra result fields are ignored. A missing `ok: true`, a wrong
+ * shape, or prose (including `Run run_… created and bound: …`) throws.
+ * Nothing here copies an id from the caller's arguments or scrapes one
+ * out of a sentence.
  *
- * These keys are this adapter's stdout contract. They are not the Orca
- * 1.4.240 CLI flag names (`--run`, `--task`, `--dispatch`, `--id`). The
- * desktop help confirm did not include a stdout sample. `--json` is not
- * passed. Output that is not this protocol is unparseable.
+ * Confirmed result paths (tag v1.4.240):
+ * - `run-create`: `result.run.id`
+ * - `task-create`: `result.task.id`
+ * - `worker-start`: `result.dispatchId`, and `result.state` must be `ready`
+ * - `worker-show`: `result.dispatch.id` (`dispatch` null is unparseable)
+ * - `worker-release`: `result.dispatchId`
+ * - `reply`: `result.message.id`
+ * - `gate-create` and `gate-resolve`: `result.gate.id`
+ * - `task-list`: `result.tasks` array and `result.count` equal to its length.
+ *   `fields.tasks` is that count as a decimal string. Task ids are not copied.
+ * - `status`: `result.runtime.state` is one of the desktop runtime states.
+ *   `fields.status` is that token.
+ * - `check`: `result.messages` array and `result.count` equal to its length.
+ *   Desktop check is a mailbox read and has no converged field. A parsed
+ *   read records `fields.converged` as `false`. It does not invent a tip.
  */
-const FIELD = /^([a-z]+(?:-[a-z]+)*): ([A-Za-z0-9][A-Za-z0-9._:-]*)$/
+const ID_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
 
-const ID_KEYS = ['run-id', 'task-id', 'worker-id', 'message-id', 'gate-id'] as const
+const RUNTIME_STATES = new Set([
+  'not_running',
+  'starting',
+  'ready',
+  'graph_not_ready',
+  'stale_bootstrap',
+])
 
-const REQUIRED: Record<OrcaCommand, readonly string[]> = {
-  status: ['status'],
-  'run-create': ['run-id'],
-  'task-create': ['task-id'],
-  'task-list': ['tasks'],
-  'worker-start': ['worker-id'],
-  'worker-show': ['worker-id'],
-  'worker-release': ['worker-id'],
-  check: ['converged'],
-  reply: ['message-id'],
-  'gate-create': ['gate-id'],
-  'gate-resolve': ['gate-id'],
+function fail(command: OrcaCommand, argv: readonly string[]): never {
+  throw new OrcaParseError(`${command} stdout is unparseable`, argv)
 }
 
-const EXTRA: Record<OrcaCommand, readonly string[]> = {
-  status: ['status'],
-  'run-create': [],
-  'task-create': [],
-  'task-list': ['tasks'],
-  'worker-start': [],
-  'worker-show': [],
-  'worker-release': [],
-  check: ['converged'],
-  reply: [],
-  'gate-create': [],
-  'gate-resolve': [],
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const ID_PROP = {
-  'run-id': 'runId',
-  'task-id': 'taskId',
-  'worker-id': 'workerId',
-  'message-id': 'messageId',
-  'gate-id': 'gateId',
-} as const
+function idToken(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !ID_TOKEN.test(value)) return undefined
+  return value
+}
 
-function allowedKeys(command: OrcaCommand): Set<string> {
-  return new Set<string>([...ID_KEYS, ...EXTRA[command]])
+function nestedId(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  return idToken(value.id)
+}
+
+function countMatches(value: unknown, length: number): boolean {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value === length
 }
 
 export function parseLiveStdout(
@@ -61,37 +63,60 @@ export function parseLiveStdout(
   stdout: string,
   argv: readonly string[],
 ): { ids: LiveOrcaIds; fields: Record<string, string> } {
-  const allowed = allowedKeys(command)
-  const fields: Record<string, string> = {}
-  for (const raw of stdout.split('\n')) {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
-    if (line.length === 0) continue
-    const match = FIELD.exec(line)
-    const key = match?.[1]
-    const value = match?.[2]
-    if (!key || value === undefined) {
-      throw new OrcaParseError(`${command} stdout is unparseable`, argv)
-    }
-    if (!allowed.has(key)) {
-      throw new OrcaParseError(`${command} stdout has an unexpected field ${key}`, argv)
-    }
-    if (Object.hasOwn(fields, key)) {
-      throw new OrcaParseError(`${command} stdout repeats ${key}`, argv)
-    }
-    if (key === 'converged' && value !== 'true' && value !== 'false') {
-      throw new OrcaParseError(`${command} stdout has an unusable converged`, argv)
-    }
-    fields[key] = value
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return fail(command, argv)
   }
-  for (const key of REQUIRED[command]) {
-    if (!Object.hasOwn(fields, key)) {
-      throw new OrcaParseError(`${command} stdout is missing ${key}`, argv)
-    }
-  }
+  if (!isRecord(parsed) || parsed.ok !== true || !isRecord(parsed.result)) return fail(command, argv)
+  const result = parsed.result
   const ids: LiveOrcaIds = {}
-  for (const key of ID_KEYS) {
-    const value = fields[key]
-    if (value !== undefined) ids[ID_PROP[key]] = value
+  const fields: Record<string, string> = {}
+
+  if (command === 'run-create') {
+    const runId = nestedId(result.run)
+    if (runId === undefined) return fail(command, argv)
+    ids.runId = runId
+  } else if (command === 'task-create') {
+    const taskId = nestedId(result.task)
+    if (taskId === undefined) return fail(command, argv)
+    ids.taskId = taskId
+  } else if (command === 'worker-start') {
+    const workerId = idToken(result.dispatchId)
+    if (workerId === undefined || result.state !== 'ready') return fail(command, argv)
+    ids.workerId = workerId
+  } else if (command === 'worker-show') {
+    const workerId = nestedId(result.dispatch)
+    if (workerId === undefined) return fail(command, argv)
+    ids.workerId = workerId
+  } else if (command === 'worker-release') {
+    const workerId = idToken(result.dispatchId)
+    if (workerId === undefined) return fail(command, argv)
+    ids.workerId = workerId
+  } else if (command === 'reply') {
+    const messageId = nestedId(result.message)
+    if (messageId === undefined) return fail(command, argv)
+    ids.messageId = messageId
+  } else if (command === 'gate-create' || command === 'gate-resolve') {
+    const gateId = nestedId(result.gate)
+    if (gateId === undefined) return fail(command, argv)
+    ids.gateId = gateId
+  } else if (command === 'task-list') {
+    if (!Array.isArray(result.tasks) || !countMatches(result.count, result.tasks.length)) {
+      return fail(command, argv)
+    }
+    fields.tasks = String(result.count)
+  } else if (command === 'status') {
+    if (!isRecord(result.runtime) || typeof result.runtime.state !== 'string') return fail(command, argv)
+    if (!RUNTIME_STATES.has(result.runtime.state)) return fail(command, argv)
+    fields.status = result.runtime.state
+  } else if (command === 'check') {
+    if (!Array.isArray(result.messages) || !countMatches(result.count, result.messages.length)) {
+      return fail(command, argv)
+    }
+    fields.converged = 'false'
   }
+
   return { ids, fields }
 }

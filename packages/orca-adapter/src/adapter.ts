@@ -61,7 +61,7 @@ type Flag = readonly [OrcaFlagName, string]
 /**
  * Live spawn is opt-in. Process spawn is reached only through `./spawn.ts`,
  * and only after `dryRun` is false and `live` is true.
- * Never synthesize an id when stdout does not contain one.
+ * Never synthesize an id when the `--json` result does not contain one.
  */
 function liveRequested(options: CreateOrcaAdapterOptions): boolean {
   if (options.live === true) return true
@@ -218,7 +218,7 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
     },
     async status(_input: StatusInput = {}) {
       // A supplied runId is not copied. Dry-run must not look like a status payload.
-      // Live does not copy it either: only stdout `run-id:` can add one.
+      // Live does not copy it either: only `result.run.id` on run-create can add one.
       const command = ORCA_CLI.commands.status
       return dispatch(command, [], () => plan(planned, command, {}))
     },

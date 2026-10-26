@@ -167,7 +167,7 @@ test('plugin config from is the handle and a tool argument is not', async () => 
   const file = path.join(dir, 'orca')
   writeFileSync(
     file,
-    `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\nprintf 'run-id: run-abc\\n'\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\nprintf 'Run run_57808dafd589 created and bound: smoke parse sample\\n'\n`,
   )
   chmodSync(file, 0o755)
   const env = { PATH: dir, OPC_ORCA_LIVE: '1' }
@@ -181,10 +181,14 @@ test('plugin config from is the handle and a tool argument is not', async () => 
   apply(loaded.ctx, { env, from: 'term_config' })
   await assert.rejects(
     () => loaded.tools[0].execute({ goal: 'fix the gate', repo, from: 'term_caller' }),
-    OrcaParseError,
+    (error) => {
+      assert.ok(error instanceof OrcaParseError)
+      assert.equal(JSON.stringify(error).includes('run_57808dafd589'), false)
+      return true
+    },
   )
   const spawned = readFileSync(log, 'utf8')
-  assert.match(spawned, /--from\nterm_config\n/)
+  assert.match(spawned, /--from\nterm_config\n--json\n/)
   assert.equal(spawned.includes('term_caller'), false)
   assert.equal(loaded.tools[0].parameters.from, undefined)
 })

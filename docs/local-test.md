@@ -107,31 +107,31 @@ The live section runs the same two goals:
 
 The dry-run half already proved the stop at `awaiting_human_pr`. A live parse advances the same states and still stops there once a verdict is recorded. The live half does not record that verdict and does not answer open, update, or merge.
 
-A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. A live sender verb with no handle is `no-sender` before spawn when the script does not skip it. The adapter does not invent a run id or a terminal handle. Compare the desktop CLI with the checklist below before changing a spelling. Desktop success text such as `Run run_… created and bound: …` is still outside the line protocol in `parse.ts`, so a live `run-create` that gets past the sender check can still fail closed as unparseable. This tip does not fill an id from that prose.
+A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. A live sender verb with no handle is `no-sender` before spawn when the script does not skip it. The adapter does not invent a run id or a terminal handle. Compare the desktop CLI with the checklist below before changing a spelling. Live spawn passes `--json`. A run id is `result.run.id` inside `{ "ok": true, "result": { "run": { "id": "…" } } }`. The envelope `id` is not a run id. Desktop prose such as `Run run_… created and bound: …` is not that envelope, so a live `run-create` that only prints the prose line fails closed and does not scrape an id. With a real handle, the normal live dig parses `run-create`, `task-create`, `worker-start`, and `check`. `check` is a mailbox read (`result.messages`, `result.count`) and records `converged` as `false`, so that dig stops in `waiting`.
 
 ## Confirm the CLI spellings
 
 Subcommands and flag names are only in [`packages/orca-adapter/src/cli.ts`](../packages/orca-adapter/src/cli.ts). `orcaCliConfirmTodo()` prints the checklist. The lines below were confirmed against Orca desktop **1.4.240** (`/Applications/Orca.app/Contents/Resources/bin/orca`, Mac local E2E). Top-level `orca run-create` is an unknown command. `status` stays top-level. Every other verb is `orca orchestration <verb>`.
 
 ```
-[x] status
-[x] orchestration run-create --objective --from
-[x] orchestration task-create --spec --run --from
-[x] orchestration task-list --run
-[x] orchestration worker-start --task --agent --worktree --run --from
-[x] orchestration worker-show --dispatch
-[x] orchestration worker-release --dispatch
-[x] orchestration check --run --terminal
-[x] orchestration reply --id --body --run --from
-[x] orchestration gate-create --task --question --from
-[x] orchestration gate-resolve --id --resolution --from
+[x] status --json
+[x] orchestration run-create --objective --from --json
+[x] orchestration task-create --spec --run --from --json
+[x] orchestration task-list --run --json
+[x] orchestration worker-start --task --agent --worktree --run --from --json
+[x] orchestration worker-show --dispatch --json
+[x] orchestration worker-release --dispatch --json
+[x] orchestration check --run --terminal --json
+[x] orchestration reply --id --body --run --from --json
+[x] orchestration gate-create --task --question --from --json
+[x] orchestration gate-resolve --id --resolution --from --json
 ```
 
 Bindings the adapter passes: goal text is `--objective`; the task spec is `--spec` (not `--task-title`); a parsed run id is `--run`; a parsed task id is `--task`; worker `dsh` is `--agent` (in-repo docs name that agent `dsh`); worktree `new-child` is `--worktree`; the worker id from stdout is `--dispatch`; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`; the coordinator terminal handle is `--from` on those sender verbs and `--terminal` on `check`.
 
-Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo`, `--base-branch`, or `--terminal`. `task-list` does not pass `--from`. `check` does not pass `--from`. `--json` is not passed. Live `reply` refuses when the caller did not supply a message id. A live sender verb refuses when no handle was supplied.
+Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo`, `--base-branch`, or `--terminal`. `task-list` does not pass `--from`. `check` does not pass `--from`. `--json` is boolean and is passed with no value. Live `reply` refuses when the caller did not supply a message id. A live sender verb refuses when no handle was supplied.
 
-The stdout line protocol (`run-id:`, `task-id:`, `worker-id:`, and the other keys in `parse.ts`) was not part of that help confirm. Output that is not that protocol is unparseable. Do not paper over a failed parse by filling in an id.
+Stdout for a live spawn is the 1.4.240 JSON envelope (`ok: true` plus `result`). Ids are tokens from the confirmed path for that verb: `result.run.id`, `result.task.id`, `result.dispatchId` (worker-start and worker-release; worker-start also requires `result.state` `ready`), `result.dispatch.id` (worker-show), `result.message.id`, and `result.gate.id`. `status` stores `result.runtime.state` (`not_running`, `starting`, `ready`, `graph_not_ready`, or `stale_bootstrap`). `task-list` stores `result.count` when it matches `result.tasks.length`, and does not copy a task id. `check` stores `converged` as `false` after `result.messages` and `result.count` match. A mailbox read is not a reviewable tip. Prose, `ok` other than `true`, and a wrong shape are unparseable. Do not paper over a failed parse by filling in an id.
 
 A checked box is the 1.4.240 help confirm. It is not a green live spawn. After this change is merged, re-run `OPC_ORCA_LIVE=1 npm run smoke:local -- --live` on the Mac. That re-run is operator-owned.
 

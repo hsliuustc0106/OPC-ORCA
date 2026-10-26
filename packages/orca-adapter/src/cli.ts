@@ -30,7 +30,8 @@ import type { OrcaCommand } from './types.ts'
  * - `worker-start` accepts optional `--repo` and `--base-branch`. This
  *   adapter does not pass them; the product binding stays on the run-create
  *   plan until a desktop confirm says those worker flags are that binding.
- * - `--json` is not passed. Stdout stays the line protocol in `parse.ts`.
+ * - `--json` is passed on every live spawn, with no value. Stdout is the
+ *   JSON envelope in `parse.ts`. Prose is unparseable.
  * - Live `reply` requires a caller-supplied message id for `--id`. The
  *   adapter does not invent one.
  * - `worker-start` accepts `--terminal` as the worker target. This adapter
@@ -40,8 +41,8 @@ import type { OrcaCommand } from './types.ts'
  *   so this adapter does not pass `--from` there.
  * - `status`, `worker-show`, and `worker-release` take no sender flag.
  *
- * TODO(orca-cli): the stdout line protocol was not part of the 1.4.240 help
- * confirm. Unparseable stdout, including JSON, stays fail-closed.
+ * TODO(orca-cli): `--json` stdout is the 1.4.240 envelope in `parse.ts`.
+ * Prose, including `Run run_… created and bound: …`, stays fail-closed.
  *
  * The binary name this repo resolves is `orca`. On Linux only, the resolver
  * falls back to `orca-ide` when `orca` is absent. That fallback is not a
@@ -79,6 +80,7 @@ export const ORCA_CLI = {
     resolution: 'resolution',
     from: 'from',
     terminal: 'terminal',
+    json: 'json',
   },
 } as const
 
@@ -90,23 +92,24 @@ export type OrcaFlagName = (typeof ORCA_CLI.flags)[keyof typeof ORCA_CLI.flags]
  * passed.
  */
 export const ORCA_COMMAND_FLAGS = {
-  status: [],
-  'run-create': [ORCA_CLI.flags.objective, ORCA_CLI.flags.from],
-  'task-create': [ORCA_CLI.flags.spec, ORCA_CLI.flags.run, ORCA_CLI.flags.from],
-  'task-list': [ORCA_CLI.flags.run],
+  status: [ORCA_CLI.flags.json],
+  'run-create': [ORCA_CLI.flags.objective, ORCA_CLI.flags.from, ORCA_CLI.flags.json],
+  'task-create': [ORCA_CLI.flags.spec, ORCA_CLI.flags.run, ORCA_CLI.flags.from, ORCA_CLI.flags.json],
+  'task-list': [ORCA_CLI.flags.run, ORCA_CLI.flags.json],
   'worker-start': [
     ORCA_CLI.flags.task,
     ORCA_CLI.flags.agent,
     ORCA_CLI.flags.worktree,
     ORCA_CLI.flags.run,
     ORCA_CLI.flags.from,
+    ORCA_CLI.flags.json,
   ],
-  'worker-show': [ORCA_CLI.flags.dispatch],
-  'worker-release': [ORCA_CLI.flags.dispatch],
-  check: [ORCA_CLI.flags.run, ORCA_CLI.flags.terminal],
-  reply: [ORCA_CLI.flags.id, ORCA_CLI.flags.body, ORCA_CLI.flags.run, ORCA_CLI.flags.from],
-  'gate-create': [ORCA_CLI.flags.task, ORCA_CLI.flags.question, ORCA_CLI.flags.from],
-  'gate-resolve': [ORCA_CLI.flags.id, ORCA_CLI.flags.resolution, ORCA_CLI.flags.from],
+  'worker-show': [ORCA_CLI.flags.dispatch, ORCA_CLI.flags.json],
+  'worker-release': [ORCA_CLI.flags.dispatch, ORCA_CLI.flags.json],
+  check: [ORCA_CLI.flags.run, ORCA_CLI.flags.terminal, ORCA_CLI.flags.json],
+  reply: [ORCA_CLI.flags.id, ORCA_CLI.flags.body, ORCA_CLI.flags.run, ORCA_CLI.flags.from, ORCA_CLI.flags.json],
+  'gate-create': [ORCA_CLI.flags.task, ORCA_CLI.flags.question, ORCA_CLI.flags.from, ORCA_CLI.flags.json],
+  'gate-resolve': [ORCA_CLI.flags.id, ORCA_CLI.flags.resolution, ORCA_CLI.flags.from, ORCA_CLI.flags.json],
 } as const satisfies Record<OrcaCommand, readonly OrcaFlagName[]>
 
 /**
@@ -136,8 +139,8 @@ export function orcaCommandHead(command: OrcaCommand): readonly string[] {
 
 /**
  * Argv tail for one live spawn: group and subcommand, then `--flag` `value`
- * pairs. `status` has no group. `shell: false` is the spawn module's job.
- * This function does not spawn.
+ * pairs, then a value-less `--json`. `status` has no group. `shell: false`
+ * is the spawn module's job. This function does not spawn.
  */
 export function orcaCliArgs(
   command: OrcaCommand,
@@ -146,11 +149,15 @@ export function orcaCliArgs(
   const allowed = new Set<string>(ORCA_COMMAND_FLAGS[command])
   const args: string[] = [...orcaCommandHead(command)]
   for (const [name, value] of flags) {
+    if (name === ORCA_CLI.flags.json) {
+      throw new TypeError(`orca CLI flag --${name} takes no value`)
+    }
     if (!allowed.has(name)) {
       throw new TypeError(`orca CLI flag --${name} is not listed for ${command}`)
     }
     args.push(`--${name}`, value)
   }
+  if (allowed.has(ORCA_CLI.flags.json)) args.push(`--${ORCA_CLI.flags.json}`)
   return args
 }
 
@@ -162,7 +169,7 @@ export function orcaCliArgs(
 export function orcaCliConfirmTodo(): readonly string[] {
   const lines = [
     'Confirmed against Orca desktop 1.4.240 (Mac local E2E, docs/local-test.md). Live argv uses these spellings. A later desktop build can still differ. Do not invent a flag this list omits.',
-    'TODO(orca-cli): stdout is still the line protocol in parse.ts. Desktop --json was not adopted. Unparseable stdout stays fail-closed.',
+    'TODO(orca-cli): live stdout is the 1.4.240 --json envelope in parse.ts. Prose such as "Run run_… created and bound" is unparseable. No id is scraped from that line.',
     'Sender: --from on run-create, task-create, worker-start, reply, gate-create, and gate-resolve. check uses --terminal for that same handle. No handle is invented. task-list, status, worker-show, and worker-release do not take a sender on this adapter.',
     `[x] binary: ${ORCA_CLI.binary}`,
     `[x] Linux PATH fallback in this repo only (not a desktop subcommand): ${ORCA_CLI.linuxFallback}`,
@@ -174,7 +181,7 @@ export function orcaCliConfirmTodo(): readonly string[] {
     lines.push(flags.length > 0 ? `[x] ${head} ${flags.join(' ')}` : `[x] ${head}`)
   }
   lines.push(
-    'Not passed on spawn: run-create has no --repo or --base (those stay on the dry-run plan). task-create has no --task-title. worker-start does not pass --repo, --base-branch, or --terminal (that terminal flag is the worker target, not the coordinator handle). task-list does not pass --from. check does not pass --from. --json is not passed.',
+    'Not passed on spawn: run-create has no --repo or --base (those stay on the dry-run plan). task-create has no --task-title. worker-start does not pass --repo, --base-branch, or --terminal (that terminal flag is the worker target, not the coordinator handle). task-list does not pass --from. check does not pass --from. --json is boolean and is passed with no value.',
   )
   return lines
 }

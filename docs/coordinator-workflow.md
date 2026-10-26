@@ -40,27 +40,27 @@ Decide whether the goal is ready to dig.
 
 The coordinator calls the adapter. A dry-run plan is:
 
-- `run-create` — goal, repo, base `origin/main`, and no run id. Live argv is `orchestration run-create --objective` plus `--from` when a coordinator terminal handle is set (`from`, otherwise `ORCA_TERMINAL_HANDLE`). `repo` and `base` are the product binding on the plan. Orca 1.4.240 does not accept them as run-create flags, and the adapter does not invent those flags. A live call with no handle throws `no-sender` before spawn and does not invent one.
+- `run-create` — goal, repo, base `origin/main`, and no run id. Live argv is `orchestration run-create --objective` plus `--from` when a coordinator terminal handle is set (`from`, otherwise `ORCA_TERMINAL_HANDLE`), then `--json`. `repo` and `base` are the product binding on the plan. Orca 1.4.240 does not accept them as run-create flags, and the adapter does not invent those flags. A live call with no handle throws `no-sender` before spawn and does not invent one. The run id is `result.run.id`. Prose `Run run_… created and bound: …` is unparseable.
 - `task-create` — the spec (the goal text) and no task id, worker, or worktree. Live argv is `orchestration task-create --spec` plus `--run` when a run id was parsed. There is no `--task-title`. Worker `dsh` and worktree `new-child` are not task-create flags.
 
-A parsed live result stores the run id from `run-create` and the task id from `task-create`. The loop passes that run id into `task-create` as `--run`. It does not invent one.
+A parsed live result stores the run id from `run-create` (`result.run.id`) and the task id from `task-create` (`result.task.id`). The loop passes that run id into `task-create` as `--run`. It does not invent one. Every live spawn passes `--json`.
 
 `run_bound` means an Orca run is the parent of the task. On a dry-run plan there is still no run id. If either call throws, the state stays `plan` and neither intent is stored.
 
 ### 5. Worker-start (`dispatched`)
 
-The coordinator calls the adapter's `worker-start` with agent `dsh` and worktree `new-child`. In-repo docs name that agent `dsh`; the live flag is `--agent`, not `--worker`. A dry-run plan invents no task id and records `worker` `dsh` and `worktree` `new-child`. A parsed live result is called with the task id from `task-create` (`--task`), the run id from `run-create` (`--run`), and stores the worker id from stdout. A throw leaves the state at `run_bound`. Optional desktop flags `--repo` and `--base-branch` are not passed. Live argv also passes `--from` with the coordinator handle. Desktop `--terminal` on this verb is a worker target and is not passed. The repo and `origin/main` binding stays on the run-create plan.
+The coordinator calls the adapter's `worker-start` with agent `dsh` and worktree `new-child`. In-repo docs name that agent `dsh`; the live flag is `--agent`, not `--worker`. A dry-run plan invents no task id and records `worker` `dsh` and `worktree` `new-child`. A parsed live result is called with the task id from `task-create` (`--task`), the run id from `run-create` (`--run`), and stores the worker id from `result.dispatchId` when `result.state` is `ready`. A throw leaves the state at `run_bound`. Optional desktop flags `--repo` and `--base-branch` are not passed. Live argv also passes `--from` with the coordinator handle. Desktop `--terminal` on this verb is a worker target and is not passed. The repo and `origin/main` binding stays on the run-create plan.
 
 The child worktree is new for this task. It is not the coordinator’s checkout and not a worktree left over from another run.
 
 ### 6. Check loop (`waiting`)
 
-The coordinator calls the adapter’s `check` and stores that result as the `check` intent. A dry-run plan is the caller’s `converged` flag and has no run id. A parsed live result is stdout `converged` and is called with the run id from `run-create` and the coordinator handle as `--terminal` (not `--from`). The caller flag is not copied onto a live result. A throw leaves the state where it was (`dispatched` or `waiting`) and stores no check intent.
+The coordinator calls the adapter’s `check` and stores that result as the `check` intent. A dry-run plan is the caller’s `converged` flag and has no run id. A parsed live result is a mailbox read (`result.messages` and `result.count`) and records `converged` as `false`. It is called with the run id from `run-create` and the coordinator handle as `--terminal` (not `--from`), plus `--json`. The caller flag is not copied onto a live result. A throw leaves the state where it was (`dispatched` or `waiting`) and stores no check intent.
 
 - Not converged: stay in `waiting`. The first successful check may enter `waiting` from `dispatched`.
 - Converged: go to `converging`.
 
-Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself. In dry-run the caller passes `converged: true` or `false`, and the plan must record that flag. In a live check, stdout decides. A thrown adapter error (`not-configured`, `not-implemented`, `no-sender`, `spawn-failed`, or `unparseable`) is failure, not converged.
+Convergence here means the worker’s branch is a reviewable tip (diff proves `origin/main`, verify ran). The coordinator does not judge that by itself. In dry-run the caller passes `converged: true` or `false`, and the plan must record that flag. A live check does not invent that tip: a parsed mailbox stays `waiting`. A thrown adapter error (`not-configured`, `not-implemented`, `no-sender`, `spawn-failed`, or `unparseable`) is failure, not converged.
 
 While the state is `waiting`, the coordinator may call `status`, `task-list`, and `worker-show`. A dry-run plan is the command only: no run id, task id, worker id, or status payload. A parsed live `status` stores the status token. A parsed live `task-list` stores the tasks token and is called with the run id. A parsed live `worker-show` stores the worker id and is called with the worker id from `worker-start`. The state stays `waiting`. These calls are not convergence and are not a substitute for `check`. A throw leaves the state on `waiting` and does not store that call’s intent. Calling them before `waiting`, or after `check` has entered `converging`, is an illegal transition.
 
