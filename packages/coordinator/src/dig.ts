@@ -8,6 +8,10 @@ export interface DigEnv {
   OPC_ORCA_LIVE?: string | undefined
   /** Coordinator terminal handle. Used only when this dig is live. */
   ORCA_TERMINAL_HANDLE?: string | undefined
+  /** Desktop agent id for live worker-start. */
+  OPC_ORCA_AGENT?: string | undefined
+  /** Optional live worker-start setup: run, skip, or inherit. */
+  OPC_ORCA_SETUP?: string | undefined
 }
 
 export interface DigRequest {
@@ -32,7 +36,7 @@ export interface DigRequest {
    * A live check ignores this and uses stdout `converged:`.
    */
   converged?: boolean
-  /** Lookup for `PATH`, `OPC_ORCA_LIVE`, and `ORCA_TERMINAL_HANDLE`. When set, `process.env` is not read. */
+  /** Lookup for `PATH`, `OPC_ORCA_LIVE`, `ORCA_TERMINAL_HANDLE`, `OPC_ORCA_AGENT`, and `OPC_ORCA_SETUP`. When set, `process.env` is not read. */
   env?: DigEnv
   /**
    * Coordinator terminal handle. Wins over `env.ORCA_TERMINAL_HANDLE`.
@@ -40,6 +44,18 @@ export interface DigRequest {
    * This is not a tool-caller field: the plugin forwards operator config only.
    */
   from?: string
+  /**
+   * Desktop agent id for live worker-start. Wins over `env.OPC_ORCA_AGENT`.
+   * A blank string is absent. Live worker-start fails closed without a
+   * confirmed id. This is not a tool-caller field.
+   */
+  agent?: string
+  /**
+   * Optional live worker-start setup (`run`, `skip`, or `inherit`).
+   * Wins over `env.OPC_ORCA_SETUP`. A blank string is absent. This is not
+   * a tool-caller field.
+   */
+  setup?: string
   platform?: string
 }
 
@@ -100,6 +116,12 @@ export async function runDig(request: DigRequest): Promise<DigSummary> {
   if (request.from !== undefined && typeof request.from !== 'string') {
     throw new TypeError('from must be a string')
   }
+  if (request.agent !== undefined && typeof request.agent !== 'string') {
+    throw new TypeError('agent must be a string')
+  }
+  if (request.setup !== undefined && typeof request.setup !== 'string') {
+    throw new TypeError('setup must be a string')
+  }
   const repo = typeof request.repo === 'string' ? request.repo.trim() : ''
   let difficulty = request.difficulty
   if (difficulty === undefined) difficulty = repo.length > 0 ? 'normal' : 'easy'
@@ -114,6 +136,8 @@ export async function runDig(request: DigRequest): Promise<DigSummary> {
   if (env !== undefined) adapterOptions.env = env
   if (platform !== undefined) adapterOptions.platform = platform
   if (request.from !== undefined) adapterOptions.from = request.from
+  if (request.agent !== undefined) adapterOptions.agent = request.agent
+  if (request.setup !== undefined) adapterOptions.setup = request.setup
   const adapter = live
     ? createOrcaAdapter({ ...adapterOptions, live: true })
     : createOrcaAdapter({ ...adapterOptions, dryRun: true })

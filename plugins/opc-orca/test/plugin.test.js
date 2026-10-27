@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { OrcaNoSenderError, OrcaNotConfiguredError, OrcaParseError } from '@opc-orca/orca-adapter'
+import { OrcaNoAgentError, OrcaNoSenderError, OrcaNotConfiguredError, OrcaParseError } from '@opc-orca/orca-adapter'
 
 import { apply, inject, name } from '../index.js'
 
@@ -191,6 +191,65 @@ test('plugin config from is the handle and a tool argument is not', async () => 
   assert.match(spawned, /--from\nterm_config\n--json\n/)
   assert.equal(spawned.includes('term_caller'), false)
   assert.equal(loaded.tools[0].parameters.from, undefined)
+})
+
+test('plugin config agent is the desktop id and a tool argument is not', async () => {
+  function bin() {
+    const dir = mkdtempSync(path.join(tmpdir(), 'orca-plugin-agent-'))
+    const log = path.join(dir, 'spawn.log')
+    const file = path.join(dir, 'orca')
+    const ready = JSON.stringify({
+      ok: true,
+      result: {
+        run: { id: 'run-abc' },
+        task: { id: 'task-abc' },
+        dispatchId: 'worker-abc',
+        state: 'ready',
+        messages: [],
+        count: 0,
+      },
+    })
+    writeFileSync(
+      file,
+      `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\nprintf '%s\\n' ${JSON.stringify(ready)}\n`,
+    )
+    chmodSync(file, 0o755)
+    return { dir, log }
+  }
+
+  const missingBin = bin()
+  const missing = host()
+  apply(missing.ctx, { env: { PATH: missingBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env' } })
+  await assert.rejects(
+    () => missing.tools[0].execute({ goal: 'fix the gate', repo, agent: 'codex' }),
+    OrcaNoAgentError,
+  )
+  const missed = readFileSync(missingBin.log, 'utf8')
+  assert.match(missed, /run-create/)
+  assert.equal(missed.includes('worker-start'), false)
+  assert.equal(missed.includes('\ncodex\n'), false)
+
+  const loadedBin = bin()
+  const loaded = host()
+  apply(loaded.ctx, {
+    env: { PATH: loadedBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env', OPC_ORCA_AGENT: 'cursor' },
+    agent: 'codex',
+    setup: 'skip',
+  })
+  const summary = await loaded.tools[0].execute({ goal: 'fix the gate', repo, agent: 'claude' })
+  assert.equal(summary.live, true)
+  assert.equal(summary.state, 'waiting')
+  assert.equal(summary.githubWritePerformed, false)
+  assert.equal(summary.intents[2].args.worker, undefined)
+  assert.equal(summary.intents[2].args.workerId, 'worker-abc')
+  const spawned = readFileSync(loadedBin.log, 'utf8')
+  assert.match(spawned, /--agent\ncodex\n/)
+  assert.match(spawned, /--setup\nskip\n/)
+  assert.match(spawned, /--name\nopc-[a-f0-9]{12}\n/)
+  assert.equal(spawned.includes('\nclaude\n'), false)
+  assert.equal(spawned.includes('\ncursor\n'), false)
+  assert.equal(spawned.includes('\ndsh\n'), false)
+  assert.equal(loaded.tools[0].parameters.agent, undefined)
 })
 
 test('apply requires the tool registry and tolerates a host with no logger', () => {

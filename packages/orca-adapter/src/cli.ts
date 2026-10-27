@@ -12,8 +12,15 @@ import type { OrcaCommand } from './types.ts'
  * - task spec → `task-create --spec` (not `--task-title`)
  * - run id → `--run` (not `--run-id`)
  * - task id → `--task` (not `--task-id`), on `worker-start` and `gate-create`
- * - worker `dsh` → `worker-start --agent` (in-repo docs name that agent `dsh`)
- * - worktree `new-child` → `worker-start --worktree`
+ * - product worker label `dsh` stays on the dry-run plan. Live `--agent` is
+ *   the operator desktop id (`agent`, otherwise `OPC_ORCA_AGENT`), one of
+ *   `ORCA_DESKTOP_AGENTS`. `dsh` is not that id. Unset or any other value
+ *   throws `no-agent` before spawn. The adapter does not invent one.
+ * - worktree `new-child` → `worker-start --worktree`, plus a unique `--name`
+ *   (`opc-` and random hex). That name is not a dispatch id. Desktop help
+ *   requires `--name` for a new worktree and rejects it for current ones.
+ * - `--setup` (`run`, `skip`, or `inherit`) only when the operator set
+ *   `setup` or `OPC_ORCA_SETUP`. Unset omits the flag (desktop default `run`).
  * - worker id from stdout → `--dispatch` on `worker-show` and `worker-release`
  * - reply message id → `reply --id`; answer text → `--body`
  * - gate reason → `gate-create --question`
@@ -27,9 +34,10 @@ import type { OrcaCommand } from './types.ts'
  *   on the dry-run plan as the product binding (`origin/main`).
  * - `task-create` has no `--worker` or `--worktree`. Optional `--task-title`
  *   is not filled from the spec.
- * - `worker-start` accepts optional `--repo` and `--base-branch`. This
- *   adapter does not pass them; the product binding stays on the run-create
- *   plan until a desktop confirm says those worker flags are that binding.
+ * - `worker-start` lists optional `--repo` and `--base-branch`. 1.4.240 help
+ *   does not require them for `new-child` (the runtime error for a new
+ *   worktree names `--name` only). This adapter does not pass them. The
+ *   product binding stays on the run-create plan.
  * - `--json` is passed on every live spawn, with no value. Stdout is the
  *   JSON envelope in `parse.ts`. Prose is unparseable.
  * - Live `reply` requires a caller-supplied message id for `--id`. The
@@ -81,8 +89,28 @@ export const ORCA_CLI = {
     from: 'from',
     terminal: 'terminal',
     json: 'json',
+    name: 'name',
+    setup: 'setup',
   },
 } as const
+
+/**
+ * `--agent` values named by Orca desktop 1.4.240 `worker-start` help
+ * ("such as" this list). Live spawn accepts only these. `dsh` is absent.
+ */
+export const ORCA_DESKTOP_AGENTS = [
+  'claude',
+  'codex',
+  'cursor',
+  'antigravity',
+  'muse',
+  'zcode',
+  'opencode',
+  'opencode2',
+] as const
+
+/** `--setup` values named by the same help. */
+export const ORCA_WORKER_SETUPS = ['run', 'skip', 'inherit'] as const
 
 export type OrcaFlagName = (typeof ORCA_CLI.flags)[keyof typeof ORCA_CLI.flags]
 
@@ -100,6 +128,8 @@ export const ORCA_COMMAND_FLAGS = {
     ORCA_CLI.flags.task,
     ORCA_CLI.flags.agent,
     ORCA_CLI.flags.worktree,
+    ORCA_CLI.flags.name,
+    ORCA_CLI.flags.setup,
     ORCA_CLI.flags.run,
     ORCA_CLI.flags.from,
     ORCA_CLI.flags.json,
@@ -181,7 +211,7 @@ export function orcaCliConfirmTodo(): readonly string[] {
     lines.push(flags.length > 0 ? `[x] ${head} ${flags.join(' ')}` : `[x] ${head}`)
   }
   lines.push(
-    'Not passed on spawn: run-create has no --repo or --base (those stay on the dry-run plan). task-create has no --task-title. worker-start does not pass --repo, --base-branch, or --terminal (that terminal flag is the worker target, not the coordinator handle). task-list does not pass --from. check does not pass --from. --json is boolean and is passed with no value.',
+    'Not passed on spawn: run-create has no --repo or --base (those stay on the dry-run plan). task-create has no --task-title. worker-start does not pass --repo or --base-branch (1.4.240 help lists both as optional; new-child requires --name only) or --terminal (that terminal flag is the worker target, not the coordinator handle). --setup is omitted unless the operator set run, skip, or inherit. task-list does not pass --from. check does not pass --from. --json is boolean and is passed with no value.',
   )
   return lines
 }

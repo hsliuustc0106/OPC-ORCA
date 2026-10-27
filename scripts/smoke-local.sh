@@ -43,7 +43,7 @@ fi
 
 run_smoke() {
   SMOKE_MODE=$1 node --experimental-strip-types --input-type=module <<'EOF'
-import { createOrcaAdapter } from '@opc-orca/orca-adapter'
+import { createOrcaAdapter, ORCA_DESKTOP_AGENTS, ORCA_WORKER_SETUPS } from '@opc-orca/orca-adapter'
 import { createDigLoop, runDig } from '@opc-orca/coordinator'
 
 const repo = 'hsliuustc0106/OPC-ORCA'
@@ -140,8 +140,8 @@ async function dry() {
   pass('smoke-local dry-run')
 }
 
-function coordinatorHandle() {
-  const raw = process.env.ORCA_TERMINAL_HANDLE
+function operatorValue(name) {
+  const raw = process.env[name]
   if (typeof raw !== 'string') return ''
   return raw.trim()
 }
@@ -150,9 +150,13 @@ async function live() {
   if (process.env.OPC_ORCA_LIVE !== '1') {
     throw new Error('live mode requires OPC_ORCA_LIVE=1')
   }
-  const handle = coordinatorHandle()
+  const handle = operatorValue('ORCA_TERMINAL_HANDLE')
+  const agent = operatorValue('OPC_ORCA_AGENT')
+  const setup = operatorValue('OPC_ORCA_SETUP')
   const liveEnv = { PATH: process.env.PATH ?? '', OPC_ORCA_LIVE: '1' }
   if (handle) liveEnv.ORCA_TERMINAL_HANDLE = handle
+  if (agent) liveEnv.OPC_ORCA_AGENT = agent
+  if (setup) liveEnv.OPC_ORCA_SETUP = setup
   const easy = await runDig({
     goal: 'Fix a typo in the readme',
     live: true,
@@ -173,6 +177,21 @@ async function live() {
         'Refusing to invent a handle. Live normal was not spawned.',
     )
     return
+  }
+
+  if (!agent) {
+    console.log(
+      'SKIP: live normal dig needs a desktop agent id. ' +
+        `Export OPC_ORCA_AGENT to one of ${ORCA_DESKTOP_AGENTS.join(', ')}. ` +
+        'Refusing to pass dsh or invent one. Live normal was not spawned.',
+    )
+    return
+  }
+  if (!ORCA_DESKTOP_AGENTS.includes(agent)) {
+    throw new Error('OPC_ORCA_AGENT is not an Orca desktop agent id. Refusing to spawn.')
+  }
+  if (setup && !ORCA_WORKER_SETUPS.includes(setup)) {
+    throw new Error('OPC_ORCA_SETUP must be run, skip, or inherit. Refusing to spawn.')
   }
 
   const normal = await runDig({

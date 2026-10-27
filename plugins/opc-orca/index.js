@@ -11,7 +11,9 @@
  * @param {{
  *   live?: boolean,
  *   from?: string,
- *   env?: { PATH?: string, OPC_ORCA_LIVE?: string, ORCA_TERMINAL_HANDLE?: string },
+ *   agent?: string,
+ *   setup?: string,
+ *   env?: { PATH?: string, OPC_ORCA_LIVE?: string, ORCA_TERMINAL_HANDLE?: string, OPC_ORCA_AGENT?: string, OPC_ORCA_SETUP?: string },
  * }} [config]
  * @returns {() => void}
  */
@@ -80,6 +82,8 @@ export function apply(ctx, config = {}) {
         live: typeof input.live === 'boolean' ? input.live : undefined,
         configLive: typeof config.live === 'boolean' ? config.live : undefined,
         from: typeof config.from === 'string' ? config.from : undefined,
+        agent: typeof config.agent === 'string' ? config.agent : undefined,
+        setup: typeof config.setup === 'string' ? config.setup : undefined,
         env: config.env,
       })
     },

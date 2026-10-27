@@ -74,7 +74,33 @@ test('each verb reads only its confirmed id path', () => {
   )
   assert.throws(
     () => parseLiveStdout('worker-start', envelope({ dispatchId: 'worker-abc', state: 'running' }), argv),
-    OrcaParseError,
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaParseError)
+      assert.match(error.message, /state running/)
+      assert.equal(`${error.message} ${JSON.stringify(error)}`.includes('worker-abc'), false)
+      return true
+    },
+  )
+  assert.throws(
+    () =>
+      parseLiveStdout(
+        'worker-start',
+        envelope({
+          dispatchId: 'ctx_should_not',
+          state: 'failed',
+          failedStage: 'agent_readiness',
+          lastError: 'timeout',
+        }),
+        argv,
+      ),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaParseError)
+      assert.match(error.message, /state failed/)
+      assert.match(error.message, /failedStage agent_readiness/)
+      assert.match(error.message, /lastError timeout/)
+      assert.equal(`${error.message} ${JSON.stringify(error)}`.includes('ctx_should_not'), false)
+      return true
+    },
   )
   assert.deepEqual(
     parseLiveStdout('worker-show', envelope({ dispatch: { id: 'worker-abc', taskId: 'task-camel' } }), argv).ids,

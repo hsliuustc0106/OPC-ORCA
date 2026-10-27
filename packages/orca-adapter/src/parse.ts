@@ -13,7 +13,9 @@ import type { LiveOrcaIds, OrcaCommand } from './types.ts'
  * Confirmed result paths (tag v1.4.240):
  * - `run-create`: `result.run.id`
  * - `task-create`: `result.task.id`
- * - `worker-start`: `result.dispatchId`, and `result.state` must be `ready`
+ * - `worker-start`: `result.dispatchId`, and `result.state` must be `ready`.
+ *   Any other state is a failure. `failedStage` and `lastError` are copied
+ *   into the error text only. The dispatch id is not.
  * - `worker-show`: `result.dispatch.id` (`dispatch` null is unparseable)
  * - `worker-release`: `result.dispatchId`
  * - `reply`: `result.message.id`
@@ -58,6 +60,50 @@ function countMatches(value: unknown, length: number): boolean {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value === length
 }
 
+function detailToken(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !ID_TOKEN.test(value)) return undefined
+  return value
+}
+
+function detailText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const collapsed = value.replace(/[\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (collapsed.length === 0) return undefined
+  return collapsed.length > 160 ? collapsed.slice(0, 160) : collapsed
+}
+
+/**
+ * Readable worker-start failure from a desktop JSON receipt.
+ * Returns undefined when the receipt does not name a non-ready state,
+ * `failedStage`, or `lastError`. Never includes `dispatchId`.
+ */
+export function workerStartFailureDetail(stdout: string): string | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return undefined
+  }
+  if (!isRecord(parsed)) return undefined
+  const result = isRecord(parsed.result) ? parsed.result : undefined
+  const error = isRecord(parsed.error) ? parsed.error : undefined
+  const data = error !== undefined && isRecord(error.data) ? error.data : undefined
+  const state = result === undefined ? undefined : detailToken(result.state)
+  const failedStage =
+    (result === undefined ? undefined : detailToken(result.failedStage)) ??
+    (result === undefined ? undefined : detailToken(result.stage)) ??
+    (data === undefined ? undefined : detailToken(data.failedStage))
+  const lastError =
+    (result === undefined ? undefined : detailText(result.lastError)) ??
+    (data === undefined ? undefined : detailText(data.lastError))
+  const parts: string[] = []
+  if (state !== undefined && state !== 'ready') parts.push(`state ${state}`)
+  if (failedStage !== undefined) parts.push(`failedStage ${failedStage}`)
+  if (lastError !== undefined) parts.push(`lastError ${lastError}`)
+  if (parts.length === 0) return undefined
+  return parts.join('; ')
+}
+
 export function parseLiveStdout(
   command: OrcaCommand,
   stdout: string,
@@ -84,7 +130,13 @@ export function parseLiveStdout(
     ids.taskId = taskId
   } else if (command === 'worker-start') {
     const workerId = idToken(result.dispatchId)
-    if (workerId === undefined || result.state !== 'ready') return fail(command, argv)
+    if (workerId === undefined || result.state !== 'ready') {
+      const detail = workerStartFailureDetail(stdout)
+      throw new OrcaParseError(
+        detail === undefined ? `${command} stdout is unparseable` : `${command} stdout is unparseable: ${detail}`,
+        argv,
+      )
+    }
     ids.workerId = workerId
   } else if (command === 'worker-show') {
     const workerId = nestedId(result.dispatch)

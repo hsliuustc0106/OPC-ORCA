@@ -1,6 +1,22 @@
-export { ORCA_CLI, ORCA_COMMAND_FLAGS, ORCA_SENDER_FLAG, orcaCliArgs, orcaCliConfirmTodo, orcaCommandHead } from './cli.ts'
+export {
+  ORCA_CLI,
+  ORCA_COMMAND_FLAGS,
+  ORCA_DESKTOP_AGENTS,
+  ORCA_SENDER_FLAG,
+  ORCA_WORKER_SETUPS,
+  orcaCliArgs,
+  orcaCliConfirmTodo,
+  orcaCommandHead,
+} from './cli.ts'
 export type { OrcaFlagName } from './cli.ts'
-export { OrcaNoSenderError, OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
+export {
+  OrcaNoAgentError,
+  OrcaNoSenderError,
+  OrcaNotConfiguredError,
+  OrcaParseError,
+  OrcaSpawnError,
+  OrcaStubError,
+} from './errors.ts'
 export { resolveOrcaExecutable } from './resolve.ts'
 export type { ResolveOptions } from './resolve.ts'
 export { createOrcaAdapter } from './adapter.ts'

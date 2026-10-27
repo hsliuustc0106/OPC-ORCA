@@ -38,6 +38,20 @@ export class OrcaNoSenderError extends Error {
 }
 
 /**
+ * Live `worker-start` needs a desktop `--agent` id. Neither `OPC_ORCA_AGENT`
+ * nor adapter `agent` supplied one that Orca 1.4.240 help lists. Nothing was
+ * spawned. This error has no agent id and no dispatch id.
+ */
+export class OrcaNoAgentError extends Error {
+  readonly code = 'no-agent' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'OrcaNoAgentError'
+  }
+}
+
+/**
  * The live CLI was spawned and did not exit 0, or the process could not be
  * started for a reason other than a missing binary. Stdout is not parsed
  * into ids. This error has no run id.

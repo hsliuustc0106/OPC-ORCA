@@ -44,7 +44,7 @@ export const WIRE_ADAPTER_TODO =
   'is on PATH, or not-implemented when the binary is present and nothing is spawned. That throw is failure, ' +
   'not a converged tip, not a successful reply or release, and not a resolved gate. ' +
   'With the live flag, the adapter spawns the binary and parses stdout for ids. ' +
-  'A missing binary, a missing coordinator terminal handle (no-sender; the handle is not invented), a non-zero exit, and unparseable stdout throw and are failure, ' +
+  'A missing binary, a missing coordinator terminal handle (no-sender; the handle is not invented), a missing or invalid desktop agent id (no-agent; dsh is not passed and no id is invented), a non-zero exit, and unparseable stdout throw and are failure, ' +
   'and that throw does not advance the coordinator. ' +
   'A parsed live result (run id, task id, worker id, status, converged) is stored and advances state. ' +
   'Dry-run plans stay free of those ids. ' +

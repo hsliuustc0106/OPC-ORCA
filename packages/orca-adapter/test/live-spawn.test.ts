@@ -6,6 +6,7 @@ import { test } from 'node:test'
 
 import {
   createOrcaAdapter,
+  OrcaNoAgentError,
   OrcaNoSenderError,
   OrcaNotConfiguredError,
   OrcaParseError,
@@ -85,16 +86,36 @@ function argvGroups(log: string): string[][] {
 
 const HANDLE = 'term_test'
 
-function liveAdapter(dir: string, options?: { handle?: string | null; from?: string }) {
+function liveAdapter(
+  dir: string,
+  options?: { handle?: string | null; from?: string; agent?: string | null; setup?: string },
+) {
   const handle = options && 'handle' in options ? options.handle : HANDLE
-  const env: { PATH: string; ORCA_TERMINAL_HANDLE?: string } = { PATH: dir }
+  const env: {
+    PATH: string
+    ORCA_TERMINAL_HANDLE?: string
+    OPC_ORCA_AGENT?: string
+    OPC_ORCA_SETUP?: string
+  } = { PATH: dir }
   if (typeof handle === 'string' && handle.length > 0) env.ORCA_TERMINAL_HANDLE = handle
+  if (options?.agent !== null) env.OPC_ORCA_AGENT = options?.agent ?? 'cursor'
+  if (options?.setup !== undefined) env.OPC_ORCA_SETUP = options.setup
   return createOrcaAdapter({
     live: true,
     env,
     platform: 'linux',
     ...(options?.from !== undefined ? { from: options.from } : {}),
   })
+}
+
+function withoutWorktreeName(group: readonly string[]): { name: string; rest: string[] } {
+  const index = group.indexOf('--name')
+  assert.notEqual(index, -1)
+  const name = group[index + 1] ?? ''
+  assert.match(name, /^opc-[a-f0-9]{12}$/)
+  const rest = group.slice()
+  rest.splice(index, 2)
+  return { name, rest }
 }
 
 function asLive(call: OrcaCallResult): LiveOrcaCall {
@@ -220,13 +241,14 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
   const groups = argvGroups(readFileSync(log, 'utf8'))
   assert.deepEqual(groups[0], ['orchestration', 'run-create', '--objective', 'dig', '--from', HANDLE, '--json'])
   assert.deepEqual(groups[1], ['orchestration', 'task-create', '--spec', 'dig', '--run', 'run-supplied', '--from', HANDLE, '--json'])
-  assert.deepEqual(groups[2], [
+  const startedArgv = withoutWorktreeName(groups[2] ?? [])
+  assert.deepEqual(startedArgv.rest, [
     'orchestration',
     'worker-start',
     '--task',
     'task-supplied',
     '--agent',
-    'dsh',
+    'cursor',
     '--worktree',
     'new-child',
     '--run',
@@ -235,6 +257,10 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
     HANDLE,
     '--json',
   ])
+  assert.equal(startedArgv.rest.includes('dsh'), false)
+  assert.equal(startedArgv.rest.includes('--repo'), false)
+  assert.equal(startedArgv.rest.includes('--base-branch'), false)
+  assert.equal(startedArgv.rest.includes('--setup'), false)
   assert.equal(groups[2]?.includes('--terminal'), false)
   assert.deepEqual(groups[3], ['orchestration', 'worker-show', '--dispatch', 'worker-supplied', '--json'])
   assert.equal(groups[3]?.includes('--from'), false)
@@ -482,7 +508,7 @@ test('from wins over ORCA_TERMINAL_HANDLE and a bad token does not spawn', async
   const dry = createOrcaAdapter({
     dryRun: true,
     from: 'term_config',
-    env: { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE, OPC_ORCA_LIVE: '1' },
+    env: { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE, OPC_ORCA_LIVE: '1', OPC_ORCA_AGENT: 'dsh' },
     platform: 'linux',
   })
   const planned = await dry.runCreate({ goal: 'dig', repo: 'repo', baseRef: 'origin/main' })
@@ -491,6 +517,124 @@ test('from wins over ORCA_TERMINAL_HANDLE and a bad token does not spawn', async
   assert.deepEqual(planned.args, { goal: 'dig', repo: 'repo', base: 'origin/main' })
   assert.equal(Object.hasOwn(planned.args, 'from'), false)
   assert.equal(readFileSync(log, 'utf8').length, beforeDry)
+
+  const named = await dry.workerStart({ taskId: 'task-fake', runId: 'run-fake' })
+  assert.equal(named.dryRun, true)
+  if (named.dryRun !== true) assert.fail('expected a dry-run plan')
+  assert.deepEqual(named.args, { worker: 'dsh', worktree: 'new-child' })
+  assert.equal(Object.hasOwn(named.args, 'name'), false)
+  assert.equal(Object.hasOwn(named.args, 'agent'), false)
+})
+
+test('live new-child passes a unique name and the configured desktop agent', async () => {
+  const { dir, log } = install('orca', successBody)
+  const adapter = liveAdapter(dir, { setup: 'skip' })
+  const first = asLive(await adapter.workerStart({ taskId: 'task-1', runId: 'run-1' }))
+  const second = asLive(await adapter.workerStart({ taskId: 'task-1', runId: 'run-1' }))
+  assert.equal(first.ids.workerId, 'worker-abc')
+  assert.equal(second.ids.workerId, 'worker-abc')
+  const groups = argvGroups(readFileSync(log, 'utf8')).filter((group) => group[1] === 'worker-start')
+  assert.equal(groups.length, 2)
+  const names = groups.map((group) => withoutWorktreeName(group).name)
+  assert.notEqual(names[0], names[1])
+  assert.equal(names[0] === 'worker-abc' || names[1] === 'worker-abc', false)
+  for (const group of groups) {
+    const parsed = withoutWorktreeName(group)
+    assert.deepEqual(parsed.rest, [
+      'orchestration',
+      'worker-start',
+      '--task',
+      'task-1',
+      '--agent',
+      'cursor',
+      '--worktree',
+      'new-child',
+      '--setup',
+      'skip',
+      '--run',
+      'run-1',
+      '--from',
+      HANDLE,
+      '--json',
+    ])
+    assert.equal(parsed.rest.includes('dsh'), false)
+    assert.equal(parsed.rest.includes('--repo'), false)
+    assert.equal(parsed.rest.includes('--base-branch'), false)
+  }
+
+  const overridden = createOrcaAdapter({
+    live: true,
+    agent: 'codex',
+    setup: 'inherit',
+    env: { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE, OPC_ORCA_AGENT: 'cursor', OPC_ORCA_SETUP: 'skip' },
+    platform: 'linux',
+  })
+  await overridden.workerStart({ taskId: 'task-1', runId: 'run-1' })
+  const last = argvGroups(readFileSync(log, 'utf8')).filter((group) => group[1] === 'worker-start').at(-1) ?? []
+  assert.equal(last.includes('codex'), true)
+  assert.equal(last.includes('cursor'), false)
+  assert.equal(last.includes('inherit'), true)
+  assert.equal(last.includes('skip'), false)
+})
+
+test('live worker-start without a desktop agent fails closed and does not spawn', async () => {
+  const { dir, log } = install('orca', successBody)
+  const missing = liveAdapter(dir, { agent: null })
+  await assert.rejects(
+    () => missing.workerStart({ taskId: 'task-1', runId: 'run-1' }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaNoAgentError)
+      assert.equal(error.code, 'no-agent')
+      assert.match(error.message, /Refusing to pass dsh or invent one/)
+      assert.equal(errorText(error).includes('cursor'), false)
+      assert.equal(errorText(error).includes('worker-abc'), false)
+      return true
+    },
+  )
+  assert.equal(existsSync(log), false)
+
+  const invalid = liveAdapter(dir, { agent: 'dsh' })
+  await assert.rejects(
+    () => invalid.workerStart({ taskId: 'task-1', runId: 'run-1' }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaNoAgentError)
+      assert.equal(errorText(error).includes('dsh'), true)
+      assert.match(error.message, /invent one/)
+      return true
+    },
+  )
+  assert.equal(existsSync(log), false)
+
+  const badSetup = liveAdapter(dir, { setup: 'hang' })
+  await assert.rejects(() => badSetup.workerStart({ taskId: 'task-1', runId: 'run-1' }), /worker setup must be run, skip, or inherit/)
+  assert.equal(existsSync(log), false)
+})
+
+test('a non-ready worker-start surfaces failedStage and does not keep the dispatch id', async () => {
+  const failed = install(
+    'orca',
+    `${emit({
+      dispatchId: 'ctx_should_not',
+      state: 'failed',
+      failedStage: 'agent_readiness',
+      lastError: 'timeout',
+    })}\nexit 1`,
+  )
+  const adapter = liveAdapter(failed.dir)
+  await assert.rejects(
+    () => adapter.workerStart({ taskId: 'task-1', runId: 'run-1' }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaSpawnError)
+      assert.equal(error.code, 'spawn-failed')
+      assert.equal(error.exitCode, 1)
+      assert.match(error.message, /state failed/)
+      assert.match(error.message, /failedStage agent_readiness/)
+      assert.match(error.message, /lastError timeout/)
+      assert.equal(errorText(error).includes('ctx_should_not'), false)
+      assert.equal(Object.hasOwn(error, 'workerId'), false)
+      return true
+    },
+  )
 })
 
 test('child_process stays inside the live spawn module', () => {

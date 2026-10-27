@@ -1,6 +1,23 @@
-import { orcaCliArgs, orcaCommandHead, ORCA_CLI, ORCA_SENDER_FLAG, type OrcaFlagName } from './cli.ts'
-import { OrcaNoSenderError, OrcaNotConfiguredError, OrcaParseError, OrcaSpawnError, OrcaStubError } from './errors.ts'
-import { parseLiveStdout } from './parse.ts'
+import { randomBytes } from 'node:crypto'
+
+import {
+  orcaCliArgs,
+  orcaCommandHead,
+  ORCA_CLI,
+  ORCA_DESKTOP_AGENTS,
+  ORCA_SENDER_FLAG,
+  ORCA_WORKER_SETUPS,
+  type OrcaFlagName,
+} from './cli.ts'
+import {
+  OrcaNoAgentError,
+  OrcaNoSenderError,
+  OrcaNotConfiguredError,
+  OrcaParseError,
+  OrcaSpawnError,
+  OrcaStubError,
+} from './errors.ts'
+import { parseLiveStdout, workerStartFailureDetail } from './parse.ts'
 import { resolveOrcaExecutable, type ResolveOptions } from './resolve.ts'
 import { spawnOrca } from './spawn.ts'
 import type {
@@ -54,6 +71,22 @@ export interface CreateOrcaAdapterOptions extends ResolveOptions {
    * Dry-run does not read it and does not record it.
    */
   from?: string
+  /**
+   * Desktop agent id for live worker-start. Wins over `OPC_ORCA_AGENT`
+   * when this string has a non-empty trim. A blank value is absent.
+   * Live worker-start throws `no-agent` when the value is missing or not
+   * in `ORCA_DESKTOP_AGENTS`. The product label `dsh` is not accepted.
+   * This adapter does not invent one. Dry-run does not read it and still
+   * records worker `dsh`.
+   */
+  agent?: string
+  /**
+   * Optional live worker-start setup (`run`, `skip`, or `inherit`).
+   * Wins over `OPC_ORCA_SETUP` when this string has a non-empty trim.
+   * A blank value is absent, and an absent value omits the flag.
+   * Any other value throws before spawn. Dry-run does not read it.
+   */
+  setup?: string
 }
 
 type Flag = readonly [OrcaFlagName, string]
@@ -133,6 +166,46 @@ function withSender(options: CreateOrcaAdapterOptions, command: OrcaCommand, fla
   return [...flags, [sender, handle]]
 }
 
+const DESKTOP_AGENTS = new Set<string>(ORCA_DESKTOP_AGENTS)
+const WORKER_SETUPS = new Set<string>(ORCA_WORKER_SETUPS)
+
+function configuredValue(
+  options: CreateOrcaAdapterOptions,
+  field: 'agent' | 'setup',
+  envKey: 'OPC_ORCA_AGENT' | 'OPC_ORCA_SETUP',
+): string | undefined {
+  const direct = options[field]
+  if (typeof direct === 'string' && direct.trim().length > 0) return direct.trim()
+  const env = options.env ?? process.env
+  const raw = env[envKey]
+  if (typeof raw !== 'string' || raw.trim().length === 0) return undefined
+  return raw.trim()
+}
+
+function desktopAgent(options: CreateOrcaAdapterOptions): string {
+  const value = configuredValue(options, 'agent', 'OPC_ORCA_AGENT')
+  if (value === undefined || !DESKTOP_AGENTS.has(value)) {
+    throw new OrcaNoAgentError(
+      'live worker-start needs a desktop agent id (OPC_ORCA_AGENT or agent). Refusing to pass dsh or invent one.',
+    )
+  }
+  return value
+}
+
+function workerSetup(options: CreateOrcaAdapterOptions): string | undefined {
+  const value = configuredValue(options, 'setup', 'OPC_ORCA_SETUP')
+  if (value === undefined) return undefined
+  if (!WORKER_SETUPS.has(value)) {
+    throw new TypeError('worker setup must be run, skip, or inherit')
+  }
+  return value
+}
+
+/** Local worktree name for `new-child`. Not an Orca run, task, or dispatch id. */
+function newChildWorktreeName(): string {
+  return `opc-${randomBytes(6).toString('hex')}`
+}
+
 function dispatchArgs(worker: OrcaWorker | undefined, worktree: OrcaWorktree | undefined): Record<string, string> {
   defaultWorker(worker, worktree)
   return {
@@ -184,7 +257,13 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
     }
     // Stderr is not parsed and is not copied into the error: a CLI secret must not land here.
     if (spawned.exitCode !== 0) {
-      throw new OrcaSpawnError(`${command} exited ${spawned.exitCode ?? 'null'}`, argv, spawned.exitCode)
+      const detail = command === 'worker-start' ? workerStartFailureDetail(spawned.stdout) : undefined
+      const suffix = detail === undefined ? '' : `: ${detail}`
+      throw new OrcaSpawnError(
+        `${command} exited ${spawned.exitCode ?? 'null'}${suffix}`,
+        argv,
+        spawned.exitCode,
+      )
     }
     let parsed
     try {
@@ -270,11 +349,17 @@ export function createOrcaAdapter(options: CreateOrcaAdapterOptions = {}): OrcaA
         const runId = input.runId === undefined ? undefined : required(input.runId, 'runId')
         defaultWorker(input.worker, input.worktree)
         if (!live) return refuse(command)
+        if (!executable) notConfigured(command)
+        const worktree = input.worktree ?? 'new-child'
         const flags: Flag[] = [
           [ORCA_CLI.flags.task, taskId],
-          [ORCA_CLI.flags.agent, input.worker ?? 'dsh'],
-          [ORCA_CLI.flags.worktree, input.worktree ?? 'new-child'],
+          [ORCA_CLI.flags.agent, desktopAgent(options)],
+          [ORCA_CLI.flags.worktree, worktree],
         ]
+        // Desktop help requires --name for a new worktree and rejects it otherwise.
+        if (worktree === 'new-child') flags.push([ORCA_CLI.flags.name, newChildWorktreeName()])
+        const setup = workerSetup(options)
+        if (setup !== undefined) flags.push([ORCA_CLI.flags.setup, setup])
         if (runId !== undefined) flags.push([ORCA_CLI.flags.run, runId])
         return runLive(command, flags)
       }

@@ -51,6 +51,6 @@ export interface DigSnapshot {
   stopReason: string | null
 }
 
-/** Agent and worktree on the worker-start dry-run plan. Live passes `dsh` as `--agent`. */
+/** Product worker label and worktree on the dry-run plan. Live `--agent` is the operator desktop id, not this label. */
 export const DEFAULT_WORKER = 'dsh'
 export const DEFAULT_WORKTREE = 'new-child'
