@@ -57,7 +57,7 @@ The script runs two goals:
 | Goal | Difficulty | What dry-run does |
 | --- | --- | --- |
 | Fix a typo in the readme | easy | Coordinator-direct. No Orca run. Summary state `converging`. |
-| Record the local smoke | normal | Planned `run-create` (goal, repo, base `origin/main`), `task-create` (spec, no worker), `worker-start` (agent `dsh`, worktree `new-child`), and `check`. Summary state `waiting`. No run id. |
+| Record the local smoke | normal | Planned `run-create` (goal, repo, base `origin/main`), `task-create` (spec, no worker), `worker-start` (worker label `dsh`, worktree `new-child`), and `check`. Summary state `waiting`. No run id. The dry-run plan does not record a worktree name or a desktop agent id. |
 
 It then records a fixture verdict (`Written-by: Smoke`, tip `smoke-local`) on each path. That fixture is local only. It is not a review of a real tip and it is not posted. Both paths stop at `awaiting_human_pr`. `githubWritePerformed` stays false. The script does not call the human yes for open, update, or merge.
 
@@ -88,6 +88,24 @@ Obtain one in either of these ways:
 
    Registering the worktree is an operator step. This repo does not do it.
 
+## Desktop agent and new-child name
+
+Orca desktop 1.4.240 `worker-start --agent` takes an agent id enabled on the worker server. The help names `claude`, `codex`, `cursor`, `antigravity`, `muse`, `zcode`, `opencode`, and `opencode2`. It does not name `dsh`. In this repo `dsh` stays the product label on the dry-run plan. Live argv does not pass it.
+
+Set the id before a live normal dig:
+
+```sh
+export OPC_ORCA_AGENT=cursor
+```
+
+Plugin or adapter config `agent` wins over that variable when the string is non-blank. A blank value is absent. Live `worker-start` throws `no-agent` before spawn when the id is missing or not in that list. Nothing invents one. The dig tool arguments do not set it.
+
+A `new-child` worktree also requires `--name`. The adapter passes a unique `opc-` name on that live call only. The name is not a dispatch id and is not stored as a worker id. Desktop help lists `--repo` and `--base-branch` as optional creation flags and does not require them for `new-child`. This adapter does not pass them.
+
+`--setup` is `run`, `skip`, or `inherit`. The desktop default is `run`. Set `OPC_ORCA_SETUP=skip` (or config `setup`) when a repository setup hook would hang the smoke. An unset value omits the flag. Any other value throws before spawn.
+
+A worker-start receipt is success only when `result.state` is `ready`. The desktop exits 1 for `failed` or `outcome_unknown` and still prints JSON. That failure names `failedStage` and `lastError` in the error text and does not store `result.dispatchId`.
+
 ## Live, after dry-run passes
 
 Turn on the Orca desktop settings above, confirm `command -v orca`, set the handle, then:
@@ -98,16 +116,16 @@ OPC_ORCA_LIVE=1 npm run smoke:local -- --live
 
 Both flags are required. `--live` alone exits nonzero and does not spawn. `OPC_ORCA_LIVE=1` alone, without `--live`, runs the dry-run section only.
 
-If `--live` is set and `OPC_ORCA_LIVE=1` but no handle is set, the script still runs the easy live dig (coordinator-direct, no spawn), prints `SKIP:` for the normal live dig, and exits 0. It does not spawn `run-create`.
+If `--live` is set and `OPC_ORCA_LIVE=1` but no handle is set, the script still runs the easy live dig (coordinator-direct, no spawn), prints `SKIP:` for the normal live dig, and exits 0. It does not spawn `run-create`. The same skip happens when the handle is set and `OPC_ORCA_AGENT` is unset: the normal dig is not spawned. An agent id outside the desktop list, or an `OPC_ORCA_SETUP` value other than `run`, `skip`, or `inherit`, is `FAIL` before spawn.
 
 The live section runs the same two goals:
 
 - **Easy** stays coordinator-direct. State `converging`. No worker is started. `githubWritePerformed` stays false.
-- **Normal** spawns `orca orchestration run-create`, `task-create`, `worker-start`, and `check` (see the checklist). The dig tool returns before the human ask (`waiting` or `converging`). It does not enter `awaiting_human_pr` by itself and it does not open a pull request. A green unit test is not this live spawn. Re-running it stays with the operator.
+- **Normal** spawns `orca orchestration run-create`, `task-create`, `worker-start`, and `check` (see the checklist). `worker-start` passes `--worktree new-child`, a unique `--name`, and `--agent` from `OPC_ORCA_AGENT`. It passes `--setup` only when you set one. The dig tool returns before the human ask (`waiting` or `converging`). It does not enter `awaiting_human_pr` by itself and it does not open a pull request. A green unit test is not this live spawn. Re-running it stays with the operator. A non-ready worker prints `failedStage` and `lastError` and is `FAIL`.
 
 The dry-run half already proved the stop at `awaiting_human_pr`. A live parse advances the same states and still stops there once a verdict is recorded. The live half does not record that verdict and does not answer open, update, or merge.
 
-A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. A live sender verb with no handle is `no-sender` before spawn when the script does not skip it. The adapter does not invent a run id or a terminal handle. Compare the desktop CLI with the checklist below before changing a spelling. Live spawn passes `--json`. A run id is `result.run.id` inside `{ "ok": true, "result": { "run": { "id": "…" } } }`. The envelope `id` is not a run id. Desktop prose such as `Run run_… created and bound: …` is not that envelope, so a live `run-create` that only prints the prose line fails closed and does not scrape an id. With a real handle, the normal live dig parses `run-create`, `task-create`, `worker-start`, and `check`. `check` is a mailbox read (`result.messages`, `result.count`) and records `converged` as `false`, so that dig stops in `waiting`.
+A missing binary, a non-zero exit, or unparseable stdout is `FAIL`. A live sender verb with no handle is `no-sender` before spawn when the script does not skip it. A live `worker-start` with no desktop agent id is `no-agent` before that spawn when the script does not skip it. The adapter does not invent a run id, a terminal handle, an agent id, or a dispatch id. Compare the desktop CLI with the checklist below before changing a spelling. Live spawn passes `--json`. A run id is `result.run.id` inside `{ "ok": true, "result": { "run": { "id": "…" } } }`. The envelope `id` is not a run id. Desktop prose such as `Run run_… created and bound: …` is not that envelope, so a live `run-create` that only prints the prose line fails closed and does not scrape an id. With a real handle and a desktop agent id, the normal live dig parses `run-create`, `task-create`, `worker-start`, and `check`. `worker-start` succeeds only when `result.state` is `ready`. `check` is a mailbox read (`result.messages`, `result.count`) and records `converged` as `false`, so that dig stops in `waiting`.
 
 ## Confirm the CLI spellings
 
@@ -118,7 +136,7 @@ Subcommands and flag names are only in [`packages/orca-adapter/src/cli.ts`](../p
 [x] orchestration run-create --objective --from --json
 [x] orchestration task-create --spec --run --from --json
 [x] orchestration task-list --run --json
-[x] orchestration worker-start --task --agent --worktree --run --from --json
+[x] orchestration worker-start --task --agent --worktree --name --setup --run --from --json
 [x] orchestration worker-show --dispatch --json
 [x] orchestration worker-release --dispatch --json
 [x] orchestration check --run --terminal --json
@@ -127,11 +145,11 @@ Subcommands and flag names are only in [`packages/orca-adapter/src/cli.ts`](../p
 [x] orchestration gate-resolve --id --resolution --from --json
 ```
 
-Bindings the adapter passes: goal text is `--objective`; the task spec is `--spec` (not `--task-title`); a parsed run id is `--run`; a parsed task id is `--task`; worker `dsh` is `--agent` (in-repo docs name that agent `dsh`); worktree `new-child` is `--worktree`; the worker id from stdout is `--dispatch`; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`; the coordinator terminal handle is `--from` on those sender verbs and `--terminal` on `check`.
+Bindings the adapter passes: goal text is `--objective`; the task spec is `--spec` (not `--task-title`); a parsed run id is `--run`; a parsed task id is `--task`; the desktop agent id is `worker-start --agent` (in-repo docs still name the product worker `dsh`; that label is not the live id); worktree `new-child` is `--worktree` and, on a live call, a unique `--name`; `--setup` only when the operator set `run`, `skip`, or `inherit`; the worker id from stdout is `--dispatch`; reply text is `--body` and the message being answered is `--id`; a gate reason is `--question`; a gate id is `gate-resolve --id`; the coordinator terminal handle is `--from` on those sender verbs and `--terminal` on `check`.
 
-Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo`, `--base-branch`, or `--terminal`. `task-list` does not pass `--from`. `check` does not pass `--from`. `--json` is boolean and is passed with no value. Live `reply` refuses when the caller did not supply a message id. A live sender verb refuses when no handle was supplied.
+Not passed, and not invented: `run-create` has no `--repo` or `--base` (those stay on the dry-run plan as the product binding, base `origin/main`). `task-create` has no `--worker` or `--worktree`. `worker-start` does not pass `--repo` or `--base-branch` (1.4.240 help lists both as optional; a new worktree requires `--name` only) or `--terminal`. `task-list` does not pass `--from`. `check` does not pass `--from`. `--json` is boolean and is passed with no value. Live `reply` refuses when the caller did not supply a message id. A live sender verb refuses when no handle was supplied. Live `worker-start` refuses when no desktop agent id was supplied.
 
-Stdout for a live spawn is the 1.4.240 JSON envelope (`ok: true` plus `result`). Ids are tokens from the confirmed path for that verb: `result.run.id`, `result.task.id`, `result.dispatchId` (worker-start and worker-release; worker-start also requires `result.state` `ready`), `result.dispatch.id` (worker-show), `result.message.id`, and `result.gate.id`. `status` stores `result.runtime.state` (`not_running`, `starting`, `ready`, `graph_not_ready`, or `stale_bootstrap`). `task-list` stores `result.count` when it matches `result.tasks.length`, and does not copy a task id. `check` stores `converged` as `false` after `result.messages` and `result.count` match. A mailbox read is not a reviewable tip. Prose, `ok` other than `true`, and a wrong shape are unparseable. Do not paper over a failed parse by filling in an id.
+Stdout for a live spawn is the 1.4.240 JSON envelope (`ok: true` plus `result`). Ids are tokens from the confirmed path for that verb: `result.run.id`, `result.task.id`, `result.dispatchId` (worker-start and worker-release; worker-start also requires `result.state` `ready`), `result.dispatch.id` (worker-show), `result.message.id`, and `result.gate.id`. A worker-start receipt whose `state` is not `ready` is a failure even when `dispatchId` is present. The error text includes `failedStage` and `lastError` when the receipt has them, and does not copy that dispatch id. `status` stores `result.runtime.state` (`not_running`, `starting`, `ready`, `graph_not_ready`, or `stale_bootstrap`). `task-list` stores `result.count` when it matches `result.tasks.length`, and does not copy a task id. `check` stores `converged` as `false` after `result.messages` and `result.count` match. A mailbox read is not a reviewable tip. Prose, `ok` other than `true`, and a wrong shape are unparseable. Do not paper over a failed parse by filling in an id.
 
 A checked box is the 1.4.240 help confirm. It is not a green live spawn. After this change is merged, re-run `OPC_ORCA_LIVE=1 npm run smoke:local -- --live` on the Mac. That re-run is operator-owned.
 
@@ -140,3 +158,4 @@ A checked box is the 1.4.240 help confirm. It is not a green live spawn. After t
 - A pull request opened, updated, or merged from this script or from the `dig` tool.
 - A live spawn when `OPC_ORCA_LIVE` is unset, when config `live` is false, or when you did not pass `--live` to the smoke script.
 - A successful run id when `orca` is missing or its stdout does not match the parser.
+- Live `worker-start --agent dsh`, or a worker id taken from a receipt whose `state` is not `ready`.

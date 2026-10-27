@@ -269,8 +269,8 @@ test('live adapter rejection does not bind a run or invent an id', async () => {
 
 const HANDLE = 'term_test'
 
-function liveEnv(dir: string): { PATH: string; ORCA_TERMINAL_HANDLE: string } {
-  return { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE }
+function liveEnv(dir: string): { PATH: string; ORCA_TERMINAL_HANDLE: string; OPC_ORCA_AGENT: string } {
+  return { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE, OPC_ORCA_AGENT: 'cursor' }
 }
 
 function emit(result: unknown): string {
@@ -479,12 +479,16 @@ test('a parsed live result advances the coordinator and still stops for a human'
   assert.deepEqual(groups[1], ['task-create', '--spec', 'fix the gate', '--run', 'run-abc', '--from', HANDLE, '--json'])
   assert.equal(groups[1]?.includes('--worker'), false)
   assert.equal(groups[1]?.includes('--agent'), false)
-  assert.deepEqual(groups[2], [
+  const nameAt = groups[2]?.indexOf('--name') ?? -1
+  const worktreeName = groups[2]?.[nameAt + 1] ?? ''
+  assert.match(worktreeName, /^opc-[a-f0-9]{12}$/)
+  const workerArgv = (groups[2] ?? []).filter((_, index) => index !== nameAt && index !== nameAt + 1)
+  assert.deepEqual(workerArgv, [
     'worker-start',
     '--task',
     'task-abc',
     '--agent',
-    'dsh',
+    'cursor',
     '--worktree',
     'new-child',
     '--run',
@@ -493,6 +497,8 @@ test('a parsed live result advances the coordinator and still stops for a human'
     HANDLE,
     '--json',
   ])
+  assert.equal(workerArgv.includes('dsh'), false)
+  assert.notEqual(worktreeName, 'worker-abc')
   assert.equal(groups[2]?.includes('--terminal'), false)
   assert.deepEqual(groups[3], ['check', '--run', 'run-abc', '--terminal', HANDLE, '--json'])
   assert.equal(groups[3]?.includes('--from'), false)
@@ -546,6 +552,44 @@ esac
   assert.equal(loop.snapshot().githubWritePerformed, false)
   assert.notEqual(loop.state, 'awaiting_human_pr')
   assert.throws(() => loop.askHumanPr({ sha: 'abc123', verdict }), IllegalTransitionError)
+})
+
+test('a non-ready live worker-start does not advance and does not keep the dispatch id', async () => {
+  const failed = liveScript(`
+printf '%s\\n' "$@" >> "$log"
+cmd=$1
+if [ "$1" = orchestration ]; then cmd=$2; fi
+case "$cmd" in
+  run-create) ${emit({ run: { id: 'run-ok' } })} ;;
+  task-create) ${emit({ task: { id: 'task-ok' } })} ;;
+  worker-start) ${emit({ dispatchId: 'ctx_should_not', state: 'failed', failedStage: 'agent_readiness', lastError: 'timeout' })}; exit 1 ;;
+  *) exit 1 ;;
+esac
+`)
+  const adapter = createOrcaAdapter({ live: true, env: liveEnv(failed.dir), platform: 'linux' })
+  const loop = createDigLoop({ adapter, repo })
+  loop.acceptGoal('fix the gate')
+  loop.triage({ agentReady: true, difficulty: 'normal' })
+  await loop.bindRun()
+  assert.equal(loop.state, 'run_bound')
+  await assert.rejects(
+    () => loop.startWorker(),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaSpawnError)
+      assert.match(error.message, /failedStage agent_readiness/)
+      assert.match(error.message, /lastError timeout/)
+      assert.equal(JSON.stringify(error).includes('ctx_should_not'), false)
+      return true
+    },
+  )
+  assert.equal(loop.state, 'run_bound')
+  assert.deepEqual(
+    loop.snapshot().intents.map((intent) => intent.command),
+    ['run-create', 'task-create'],
+  )
+  assert.equal(JSON.stringify(loop.snapshot()).includes('ctx_should_not'), false)
+  assert.equal(loop.snapshot().githubWritePerformed, false)
+  assert.notEqual(loop.state, 'awaiting_human_pr')
 })
 
 test('unparseable live check stdout does not advance', async () => {

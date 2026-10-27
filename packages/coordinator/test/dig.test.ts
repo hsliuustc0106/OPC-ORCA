@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 
-import { OrcaNoSenderError, OrcaNotConfiguredError } from '@opc-orca/orca-adapter'
+import { OrcaNoAgentError, OrcaNoSenderError, OrcaNotConfiguredError } from '@opc-orca/orca-adapter'
 
 import { operatorAllowsLive, runDig } from '../src/index.ts'
 
@@ -186,7 +186,7 @@ test('live dig passes --from from the env and from overrides it', async () => {
   const summary = await runDig({
     goal: 'fix the gate',
     repo,
-    env: { PATH: envBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env' },
+    env: { PATH: envBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env', OPC_ORCA_AGENT: 'cursor' },
     platform: 'linux',
   })
   assert.equal(summary.live, true)
@@ -199,6 +199,11 @@ test('live dig passes --from from the env and from overrides it', async () => {
   const envLog = readFileSync(envBin.log, 'utf8')
   assert.match(envLog, /--from\nterm_env\n--json\n/)
   assert.match(envLog, /--terminal\nterm_env\n--json\n/)
+  assert.match(envLog, /--agent\ncursor\n/)
+  assert.match(envLog, /--name\nopc-[a-f0-9]{12}\n/)
+  assert.equal(envLog.includes('\ndsh\n'), false)
+  assert.equal(envLog.includes('--repo'), false)
+  assert.equal(envLog.includes('--base-branch'), false)
   assert.equal(envLog.includes('--terminal\nterm_env') && envLog.includes('check\n'), true)
 
   const fromBin = liveBin()
@@ -206,7 +211,7 @@ test('live dig passes --from from the env and from overrides it', async () => {
     goal: 'fix the gate',
     repo,
     from: 'term_config',
-    env: { PATH: fromBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env' },
+    env: { PATH: fromBin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env', OPC_ORCA_AGENT: 'claude' },
     platform: 'linux',
   })
   assert.equal(overridden.state, 'waiting')
@@ -215,6 +220,49 @@ test('live dig passes --from from the env and from overrides it', async () => {
   assert.match(fromLog, /--from\nterm_config\n--json\n/)
   assert.equal(fromLog.includes('term_env'), false)
   assert.match(fromLog, /--terminal\nterm_config\n--json\n/)
+  assert.match(fromLog, /--agent\nclaude\n/)
+})
+
+test('live dig without a desktop agent fails closed before worker-start', async () => {
+  const bin = liveBin()
+  await assert.rejects(
+    () =>
+      runDig({
+        goal: 'fix the gate',
+        repo,
+        env: { PATH: bin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env' },
+        platform: 'linux',
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaNoAgentError)
+      assert.equal(error.code, 'no-agent')
+      assert.equal(JSON.stringify(error).includes('cursor'), false)
+      return true
+    },
+  )
+  const spawned = readFileSync(bin.log, 'utf8')
+  assert.match(spawned, /run-create/)
+  assert.equal(spawned.includes('worker-start'), false)
+})
+
+test('dig agent config wins over OPC_ORCA_AGENT and a tool field is not this option', async () => {
+  const bin = liveBin()
+  const summary = await runDig({
+    goal: 'fix the gate',
+    repo,
+    agent: 'codex',
+    setup: 'skip',
+    env: { PATH: bin.dir, OPC_ORCA_LIVE: '1', ORCA_TERMINAL_HANDLE: 'term_env', OPC_ORCA_AGENT: 'cursor' },
+    platform: 'linux',
+  })
+  assert.equal(summary.state, 'waiting')
+  assert.equal(summary.githubWritePerformed, false)
+  const spawned = readFileSync(bin.log, 'utf8')
+  assert.match(spawned, /--agent\ncodex\n/)
+  assert.match(spawned, /--setup\nskip\n/)
+  assert.equal(spawned.includes('\ncursor\n'), false)
+  assert.equal(summary.intents[2]?.args.worker, undefined)
+  assert.equal(summary.intents[2]?.args.workerId, 'worker-abc')
 })
 
 test('configLive must be boolean', async () => {

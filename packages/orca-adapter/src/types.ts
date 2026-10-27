@@ -17,9 +17,10 @@ export type OrcaCommand =
   | 'gate-resolve'
 
 /**
- * v0 knows one agent and one worktree layout. Anything else is rejected.
- * Live `worker-start` passes the agent as `--agent` (value `dsh`) and the
- * worktree as `--worktree`. In-repo docs name that agent `dsh`.
+ * v0 knows one product worker label and one worktree layout. Anything else
+ * is rejected. The dry-run plan records worker `dsh`. Live `worker-start`
+ * passes `--worktree new-child`, a unique `--name`, and `--agent` from the
+ * operator desktop id. It does not pass `dsh` as that id.
  */
 export type OrcaWorker = 'dsh'
 export type OrcaWorktree = 'new-child'
@@ -64,7 +65,11 @@ export interface WorkerStartInput {
    * Live passes this as `--run` when set. Dry-run does not copy it.
    */
   runId?: string
-  /** Live passes this as `--agent`. Default `dsh`. */
+  /**
+   * Product label on the dry-run plan. Default `dsh`. Live does not pass
+   * this string as `--agent`. The desktop id is adapter `agent` or
+   * `OPC_ORCA_AGENT`.
+   */
   worker?: OrcaWorker
   /** Live passes this as `--worktree`. Default `new-child`. */
   worktree?: OrcaWorktree
@@ -251,6 +256,14 @@ export interface OrcaAdapter {
    * With live on, `result.tasks` and `result.count` must parse; a task id is not invented.
    */
   taskList(input?: TaskListInput): Promise<OrcaCallResult>
+  /**
+   * Dry-run records worker `dsh` and worktree `new-child` and does not
+   * record a name or a desktop agent id. Live passes `--name` for
+   * `new-child`, `--agent` from the operator, and `--setup` only when
+   * configured. Success is `result.state` `ready` plus `result.dispatchId`.
+   * A non-ready receipt throws and does not store that dispatch id.
+   * `no-agent` throws before spawn when the desktop id is unset or invalid.
+   */
   workerStart(input: WorkerStartInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a worker id.

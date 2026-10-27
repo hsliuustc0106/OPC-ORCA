@@ -37,11 +37,12 @@ export interface DigLoop {
    */
   bindRun(): Promise<void>
   /**
-   * Calls the adapter for `worker-start` (agent dsh, worktree new-child).
+   * Calls the adapter for `worker-start` (worker label dsh, worktree new-child).
    * The default adapter does not spawn. A dry-run plan has no task id. A
    * parsed live result stores the worker id and is called with the task id
-   * from task-create (`--task`) and the run id (`--run`). A rejection leaves
-   * the state on `run_bound`.
+   * from task-create (`--task`) and the run id (`--run`). Live `--agent` is
+   * the operator desktop id. A rejection, including `no-agent` and a
+   * non-ready receipt, leaves the state on `run_bound`.
    */
   startWorker(): Promise<void>
   /**
@@ -143,7 +144,7 @@ export interface DigLoopOptions {
    * `gate-create` and `gate-resolve` while waiting, and `worker-release`
    * after converging. Default: dry-run, no binary required, even if
    * `OPC_ORCA_LIVE=1` is set in the process environment. A live failure
-   * (`not-configured`, `not-implemented`, `no-sender`, `spawn-failed`, `unparseable`)
+   * (`not-configured`, `not-implemented`, `no-sender`, `no-agent`, `spawn-failed`, `unparseable`)
    * rejects and does not advance state. A parsed live result stores the
    * ids, status, and converged flag from that result and advances the same
    * states as a dry-run plan. The loop does not invent a run id or a gate
