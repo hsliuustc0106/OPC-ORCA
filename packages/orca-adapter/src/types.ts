@@ -78,7 +78,8 @@ export interface CheckInput {
   runId?: string
   /**
    * Dry-run records this caller flag as `true` or `false`. It is not an Orca
-   * result. Live calls do not copy it: stdout must print `converged:`.
+   * result. Live calls do not copy it. A parsed mailbox check records
+   * `converged` as `false`.
    */
   converged?: boolean
 }
@@ -86,8 +87,9 @@ export interface CheckInput {
 export interface StatusInput {
   /**
    * Ignored. Dry-run does not copy a run id and does not return a status
-   * payload. Live calls do not copy it either. Status stdout must print
-   * `status:`; a run id is returned only when stdout prints `run-id:`.
+   * payload. Live calls do not copy it either. Status stdout must be the
+   * `--json` envelope. `fields.status` is `result.runtime.state`. A run id
+   * is not copied from status.
    */
   runId?: string
 }
@@ -231,62 +233,63 @@ export interface OrcaAdapter {
    * Dry-run resolves a plan and does not require the CLI. The plan has no
    * run id and no status payload. With live off, the promise rejects with
    * not-configured or not-implemented. With live on, it spawns and rejects
-   * with not-configured, spawn-failed, or unparseable instead of inventing
-   * a status payload.
+   * with not-configured, no-sender, spawn-failed, or unparseable instead of
+   * inventing a status payload or a terminal handle.
    */
   status(input?: StatusInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI. With live off, the
-   * promise rejects and never resolves a run id. With live on, a run id is
-   * returned only when stdout prints `run-id:`.
+   * promise rejects and never resolves a run id. With live on, a missing
+   * coordinator terminal handle rejects with no-sender before spawn, and a
+   * run id is returned only from `result.run.id`.
    */
   runCreate(input: RunCreateInput): Promise<OrcaCallResult>
   taskCreate(input: TaskCreateInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a run id.
    * With live off, the promise rejects and never resolves a task list.
-   * With live on, `tasks:` must be printed; a task id is not invented.
+   * With live on, `result.tasks` and `result.count` must parse; a task id is not invented.
    */
   taskList(input?: TaskListInput): Promise<OrcaCallResult>
   workerStart(input: WorkerStartInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a worker id.
    * With live off, the promise rejects and never resolves a worker record.
-   * With live on, a worker id is returned only when stdout prints `worker-id:`.
+   * With live on, a worker id is returned only from `result.dispatch.id`.
    */
   workerShow(input?: WorkerShowInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan and does not require the CLI or a worker id.
    * With live off, the promise rejects and never resolves a worker id.
-   * With live on, a worker id is returned only when stdout prints `worker-id:`.
+   * With live on, a worker id is returned only from `result.dispatchId`.
    */
   workerRelease(input?: WorkerReleaseInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the caller's converged flag and does not
    * require the CLI or a run id. With live off, the promise rejects and
-   * never resolves a run id. With live on, `converged:` must be printed;
-   * the caller's flag is not copied.
+   * never resolves a run id. With live on, a parsed mailbox read records
+   * `converged` as `false`. The caller's flag is not copied.
    */
   check(input: CheckInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the answer text and does not require the
    * CLI or a run id. With live off, the promise rejects and never resolves
-   * a message id. With live on, a message id is returned only when stdout
-   * prints `message-id:`. This is not a human PR approval.
+   * a message id. With live on, a message id is returned only from
+   * `result.message.id`. This is not a human PR approval.
    */
   reply(input: ReplyInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the reason and does not require the CLI
    * or a run id. With live off, the promise rejects and never resolves a
-   * gate id. With live on, a gate id is returned only when stdout prints
-   * `gate-id:`. This is an Orca backend gate, not a human PR approval.
+   * gate id. With live on, a gate id is returned only from `result.gate.id`.
+   * This is an Orca backend gate, not a human PR approval.
    */
   gateCreate(input: GateCreateInput): Promise<OrcaCallResult>
   /**
    * Dry-run resolves a plan with the resolution and does not require the
    * CLI or a gate id. With live off, the promise rejects and never resolves
    * a gate id or an exit code. With live on, exit 0 is returned only when
-   * the process exited 0, and a gate id only when stdout prints `gate-id:`.
+   * the process exited 0, and a gate id only from `result.gate.id`.
    * This is an Orca backend gate, not a human PR approval.
    */
   gateResolve(input: GateResolveInput): Promise<OrcaCallResult>

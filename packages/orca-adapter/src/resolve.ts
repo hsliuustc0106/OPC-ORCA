@@ -3,10 +3,14 @@ import path from 'node:path'
 
 export interface ResolveOptions {
   /**
-   * Lookup environment for `PATH` and `OPC_ORCA_LIVE`.
+   * Lookup environment for `PATH`, `OPC_ORCA_LIVE`, and `ORCA_TERMINAL_HANDLE`.
    * Omitted keys are not read from `process.env` when this object is passed.
    */
-  env?: { PATH?: string | undefined; OPC_ORCA_LIVE?: string | undefined }
+  env?: {
+    PATH?: string | undefined
+    OPC_ORCA_LIVE?: string | undefined
+    ORCA_TERMINAL_HANDLE?: string | undefined
+  }
   platform?: string
 }
 

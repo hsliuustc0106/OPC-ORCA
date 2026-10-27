@@ -140,11 +140,19 @@ async function dry() {
   pass('smoke-local dry-run')
 }
 
+function coordinatorHandle() {
+  const raw = process.env.ORCA_TERMINAL_HANDLE
+  if (typeof raw !== 'string') return ''
+  return raw.trim()
+}
+
 async function live() {
   if (process.env.OPC_ORCA_LIVE !== '1') {
     throw new Error('live mode requires OPC_ORCA_LIVE=1')
   }
+  const handle = coordinatorHandle()
   const liveEnv = { PATH: process.env.PATH ?? '', OPC_ORCA_LIVE: '1' }
+  if (handle) liveEnv.ORCA_TERMINAL_HANDLE = handle
   const easy = await runDig({
     goal: 'Fix a typo in the readme',
     live: true,
@@ -156,6 +164,16 @@ async function live() {
   assertOk(easy.path === 'coordinator-direct', 'easy live path')
   assertOk(easy.githubWritePerformed === false, 'easy live wrote to GitHub')
   pass('live easy converging githubWritePerformed=false')
+
+  if (!handle) {
+    console.log(
+      'SKIP: live normal dig needs a coordinator terminal handle. ' +
+        'Export ORCA_TERMINAL_HANDLE (orca terminal create in a registered worktree prints ' +
+        '"Created terminal term_…"), or run this smoke from an Orca terminal where that variable is already set. ' +
+        'Refusing to invent a handle. Live normal was not spawned.',
+    )
+    return
+  }
 
   const normal = await runDig({
     goal: 'Record the local smoke',

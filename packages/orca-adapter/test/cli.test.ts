@@ -3,21 +3,21 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { ORCA_CLI, ORCA_COMMAND_FLAGS, orcaCliArgs, orcaCliConfirmTodo, orcaCommandHead } from '../src/cli.ts'
+import { ORCA_CLI, ORCA_COMMAND_FLAGS, ORCA_SENDER_FLAG, orcaCliArgs, orcaCliConfirmTodo, orcaCommandHead } from '../src/cli.ts'
 import type { OrcaCommand, OrcaFlagName } from '../src/index.ts'
 
 const confirmed = [
-  '[x] status',
-  '[x] orchestration run-create --objective',
-  '[x] orchestration task-create --spec --run',
-  '[x] orchestration task-list --run',
-  '[x] orchestration worker-start --task --agent --worktree --run',
-  '[x] orchestration worker-show --dispatch',
-  '[x] orchestration worker-release --dispatch',
-  '[x] orchestration check --run',
-  '[x] orchestration reply --id --body --run',
-  '[x] orchestration gate-create --task --question',
-  '[x] orchestration gate-resolve --id --resolution',
+  '[x] status --json',
+  '[x] orchestration run-create --objective --from --json',
+  '[x] orchestration task-create --spec --run --from --json',
+  '[x] orchestration task-list --run --json',
+  '[x] orchestration worker-start --task --agent --worktree --run --from --json',
+  '[x] orchestration worker-show --dispatch --json',
+  '[x] orchestration worker-release --dispatch --json',
+  '[x] orchestration check --run --terminal --json',
+  '[x] orchestration reply --id --body --run --from --json',
+  '[x] orchestration gate-create --task --question --from --json',
+  '[x] orchestration gate-resolve --id --resolution --from --json',
 ] as const
 
 test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
@@ -55,31 +55,46 @@ test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
   }
 
   assert.deepEqual(ORCA_COMMAND_FLAGS, {
-    status: [],
-    'run-create': ['objective'],
-    'task-create': ['spec', 'run'],
-    'task-list': ['run'],
-    'worker-start': ['task', 'agent', 'worktree', 'run'],
-    'worker-show': ['dispatch'],
-    'worker-release': ['dispatch'],
-    check: ['run'],
-    reply: ['id', 'body', 'run'],
-    'gate-create': ['task', 'question'],
-    'gate-resolve': ['id', 'resolution'],
+    status: ['json'],
+    'run-create': ['objective', 'from', 'json'],
+    'task-create': ['spec', 'run', 'from', 'json'],
+    'task-list': ['run', 'json'],
+    'worker-start': ['task', 'agent', 'worktree', 'run', 'from', 'json'],
+    'worker-show': ['dispatch', 'json'],
+    'worker-release': ['dispatch', 'json'],
+    check: ['run', 'terminal', 'json'],
+    reply: ['id', 'body', 'run', 'from', 'json'],
+    'gate-create': ['task', 'question', 'from', 'json'],
+    'gate-resolve': ['id', 'resolution', 'from', 'json'],
   })
+  assert.deepEqual(ORCA_SENDER_FLAG, {
+    'run-create': 'from',
+    'task-create': 'from',
+    'worker-start': 'from',
+    check: 'terminal',
+    reply: 'from',
+    'gate-create': 'from',
+    'gate-resolve': 'from',
+  })
+  assert.equal(Object.hasOwn(ORCA_SENDER_FLAG, 'status'), false)
+  assert.equal(Object.hasOwn(ORCA_SENDER_FLAG, 'task-list'), false)
+  assert.equal(Object.hasOwn(ORCA_SENDER_FLAG, 'worker-show'), false)
+  assert.equal(Object.hasOwn(ORCA_SENDER_FLAG, 'worker-release'), false)
+  assert.equal(ORCA_COMMAND_FLAGS['worker-start'].includes('terminal'), false)
+  assert.equal(ORCA_COMMAND_FLAGS.check.includes('from'), false)
 
   assert.deepEqual(orcaCommandHead('status'), ['status'])
   assert.deepEqual(orcaCommandHead('run-create'), ['orchestration', 'run-create'])
   assert.deepEqual(
     orcaCliArgs(ORCA_CLI.commands.runCreate, [[ORCA_CLI.flags.objective, 'dig']]),
-    ['orchestration', 'run-create', '--objective', 'dig'],
+    ['orchestration', 'run-create', '--objective', 'dig', '--json'],
   )
   assert.deepEqual(
     orcaCliArgs(ORCA_CLI.commands.taskCreate, [
       [ORCA_CLI.flags.spec, 'dig'],
       [ORCA_CLI.flags.run, 'run-1'],
     ]),
-    ['orchestration', 'task-create', '--spec', 'dig', '--run', 'run-1'],
+    ['orchestration', 'task-create', '--spec', 'dig', '--run', 'run-1', '--json'],
   )
   assert.deepEqual(
     orcaCliArgs(ORCA_CLI.commands.workerStart, [
@@ -99,6 +114,7 @@ test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
       'new-child',
       '--run',
       'run-1',
+      '--json',
     ],
   )
   assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.workerShow, [[ORCA_CLI.flags.dispatch, 'dispatch-1']]), [
@@ -106,6 +122,7 @@ test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
     'worker-show',
     '--dispatch',
     'dispatch-1',
+    '--json',
   ])
   assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.reply, [
     [ORCA_CLI.flags.id, 'msg-1'],
@@ -120,22 +137,37 @@ test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
     'ship the tip',
     '--run',
     'run-1',
+    '--json',
   ])
   assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.gateCreate, [
     [ORCA_CLI.flags.task, 'task-1'],
     [ORCA_CLI.flags.question, 'worker blocked'],
-  ]), ['orchestration', 'gate-create', '--task', 'task-1', '--question', 'worker blocked'])
+  ]), ['orchestration', 'gate-create', '--task', 'task-1', '--question', 'worker blocked', '--json'])
   assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.gateResolve, [
     [ORCA_CLI.flags.id, 'gate-1'],
     [ORCA_CLI.flags.resolution, 'continue'],
-  ]), ['orchestration', 'gate-resolve', '--id', 'gate-1', '--resolution', 'continue'])
-  assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.status, []), ['status'])
-  assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.check, [[ORCA_CLI.flags.run, 'run-1']]), [
+  ]), ['orchestration', 'gate-resolve', '--id', 'gate-1', '--resolution', 'continue', '--json'])
+  assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.status, []), ['status', '--json'])
+  assert.deepEqual(orcaCliArgs(ORCA_CLI.commands.check, [
+    [ORCA_CLI.flags.run, 'run-1'],
+    [ORCA_CLI.flags.terminal, 'term_test'],
+  ]), [
     'orchestration',
     'check',
     '--run',
     'run-1',
+    '--terminal',
+    'term_test',
+    '--json',
   ])
+  assert.throws(
+    () => orcaCliArgs(ORCA_CLI.commands.check, [[ORCA_CLI.flags.from, 'term_test']]),
+    /not listed for check/,
+  )
+  assert.throws(
+    () => orcaCliArgs(ORCA_CLI.commands.workerStart, [[ORCA_CLI.flags.terminal, 'term_test']]),
+    /not listed for worker-start/,
+  )
   assert.throws(
     () => orcaCliArgs(ORCA_CLI.commands.check, [[ORCA_CLI.flags.objective, 'nope']]),
     /not listed for check/,
@@ -143,6 +175,10 @@ test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
   assert.throws(
     () => orcaCliArgs(ORCA_CLI.commands.runCreate, [['repo' as OrcaFlagName, 'nope']]),
     /not listed for run-create/,
+  )
+  assert.throws(
+    () => orcaCliArgs(ORCA_CLI.commands.runCreate, [[ORCA_CLI.flags.json, 'true']]),
+    /takes no value/,
   )
 
   const source = readFileSync(fileURLToPath(new URL('../src/adapter.ts', import.meta.url)), 'utf8')
@@ -158,6 +194,9 @@ test('CLI spellings match the Orca 1.4.240 orchestration help', () => {
     assert.equal(doc.includes(line), true, line)
   }
   assert.match(doc, /1\.4\.240/)
+  assert.match(doc, /ORCA_TERMINAL_HANDLE/)
+  assert.match(doc, /no-sender/)
+  assert.match(doc, /Created terminal/)
 
   const commandKeys = Object.keys(ORCA_COMMAND_FLAGS) as OrcaCommand[]
   assert.deepEqual(commandKeys.sort(), [...commands].sort())

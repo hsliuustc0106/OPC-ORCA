@@ -6,6 +6,7 @@ import { test } from 'node:test'
 
 import {
   createOrcaAdapter,
+  OrcaNoSenderError,
   OrcaNotConfiguredError,
   OrcaParseError,
   OrcaSpawnError,
@@ -22,22 +23,27 @@ function install(name: string, body: string): { dir: string; log: string } {
   return { dir, log }
 }
 
+function emit(result: unknown): string {
+  const payload = JSON.stringify({ ok: true, id: 'rpc_envelope', result })
+  return `printf '%s\\n' ${JSON.stringify(payload)}`
+}
+
 const successBody = `
 printf '%s\\n' "$@" >> "$log"
 cmd=$1
 if [ "$1" = orchestration ]; then cmd=$2; fi
 case "$cmd" in
-  run-create) printf 'run-id: run-abc\\n' ;;
-  task-create) printf 'task-id: task-abc\\n' ;;
-  worker-start) printf 'worker-id: worker-abc\\n' ;;
-  worker-show) printf 'worker-id: worker-abc\\n' ;;
-  worker-release) printf 'worker-id: worker-abc\\n' ;;
-  check) printf 'converged: false\\n' ;;
-  reply) printf 'message-id: msg-abc\\n' ;;
-  gate-create) printf 'gate-id: gate-abc\\n' ;;
-  gate-resolve) printf 'gate-id: gate-from-cli\\n' ;;
-  status) printf 'status: waiting\\n' ;;
-  task-list) printf 'tasks: none\\n' ;;
+  run-create) ${emit({ run: { id: 'run-abc', objective: 'dig' } })} ;;
+  task-create) ${emit({ task: { id: 'task-abc', status: 'open' } })} ;;
+  worker-start) ${emit({ dispatchId: 'worker-abc', state: 'ready', runId: 'run-not-copied', taskId: 'task-not-copied' })} ;;
+  worker-show) ${emit({ dispatch: { id: 'worker-abc', taskId: 'task-camel' } })} ;;
+  worker-release) ${emit({ dispatchId: 'worker-abc' })} ;;
+  check) ${emit({ messages: [], count: 0, runId: 'run-not-copied', converged: true })} ;;
+  reply) ${emit({ message: { id: 'msg-abc' } })} ;;
+  gate-create) ${emit({ gate: { id: 'gate-abc', task_id: 'task-supplied', status: 'open' } })} ;;
+  gate-resolve) ${emit({ gate: { id: 'gate-from-cli', status: 'resolved' } })} ;;
+  status) ${emit({ runtime: { state: 'ready' }, app: { running: true } })} ;;
+  task-list) ${emit({ tasks: [], count: 0, runId: 'run-not-copied' })} ;;
   *) printf 'unknown\\n' >&2; exit 1 ;;
 esac
 `
@@ -61,8 +67,15 @@ function argvGroups(log: string): string[][] {
       continue
     }
     if (line === 'status') {
-      groups.push([line])
+      const group = [line]
       index += 1
+      while (index < lines.length && lines[index] !== 'orchestration' && lines[index] !== 'status') {
+        const next = lines[index]
+        if (next === undefined) break
+        group.push(next)
+        index += 1
+      }
+      groups.push(group)
       continue
     }
     index += 1
@@ -70,8 +83,18 @@ function argvGroups(log: string): string[][] {
   return groups
 }
 
-function liveAdapter(dir: string) {
-  return createOrcaAdapter({ live: true, env: { PATH: dir }, platform: 'linux' })
+const HANDLE = 'term_test'
+
+function liveAdapter(dir: string, options?: { handle?: string | null; from?: string }) {
+  const handle = options && 'handle' in options ? options.handle : HANDLE
+  const env: { PATH: string; ORCA_TERMINAL_HANDLE?: string } = { PATH: dir }
+  if (typeof handle === 'string' && handle.length > 0) env.ORCA_TERMINAL_HANDLE = handle
+  return createOrcaAdapter({
+    live: true,
+    env,
+    platform: 'linux',
+    ...(options?.from !== undefined ? { from: options.from } : {}),
+  })
 }
 
 function asLive(call: OrcaCallResult): LiveOrcaCall {
@@ -187,16 +210,16 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
   assert.notEqual(resolved.ids.gateId, 'gate-supplied')
 
   const observed = asLive(await adapter.status({ runId: 'run-supplied' }))
-  assert.equal(observed.fields.status, 'waiting')
+  assert.equal(observed.fields.status, 'ready')
   assert.equal(Object.hasOwn(observed.ids, 'runId'), false)
   const listed = asLive(await adapter.taskList({ runId: 'run-supplied' }))
-  assert.equal(listed.fields.tasks, 'none')
+  assert.equal(listed.fields.tasks, '0')
   assert.equal(Object.hasOwn(listed.ids, 'taskId'), false)
 
   assert.deepEqual(adapter.planned, [])
   const groups = argvGroups(readFileSync(log, 'utf8'))
-  assert.deepEqual(groups[0], ['orchestration', 'run-create', '--objective', 'dig'])
-  assert.deepEqual(groups[1], ['orchestration', 'task-create', '--spec', 'dig', '--run', 'run-supplied'])
+  assert.deepEqual(groups[0], ['orchestration', 'run-create', '--objective', 'dig', '--from', HANDLE, '--json'])
+  assert.deepEqual(groups[1], ['orchestration', 'task-create', '--spec', 'dig', '--run', 'run-supplied', '--from', HANDLE, '--json'])
   assert.deepEqual(groups[2], [
     'orchestration',
     'worker-start',
@@ -208,10 +231,18 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
     'new-child',
     '--run',
     'run-supplied',
+    '--from',
+    HANDLE,
+    '--json',
   ])
-  assert.deepEqual(groups[3], ['orchestration', 'worker-show', '--dispatch', 'worker-supplied'])
-  assert.deepEqual(groups[4], ['orchestration', 'worker-release', '--dispatch', 'worker-supplied'])
-  assert.deepEqual(groups[5], ['orchestration', 'check', '--run', 'run-supplied'])
+  assert.equal(groups[2]?.includes('--terminal'), false)
+  assert.deepEqual(groups[3], ['orchestration', 'worker-show', '--dispatch', 'worker-supplied', '--json'])
+  assert.equal(groups[3]?.includes('--from'), false)
+  assert.equal(groups[3]?.includes(HANDLE), false)
+  assert.deepEqual(groups[4], ['orchestration', 'worker-release', '--dispatch', 'worker-supplied', '--json'])
+  assert.equal(groups[4]?.includes('--from'), false)
+  assert.deepEqual(groups[5], ['orchestration', 'check', '--run', 'run-supplied', '--terminal', HANDLE, '--json'])
+  assert.equal(groups[5]?.includes('--from'), false)
   assert.deepEqual(groups[6], [
     'orchestration',
     'reply',
@@ -221,6 +252,9 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
     'ship the tip',
     '--run',
     'run-supplied',
+    '--from',
+    HANDLE,
+    '--json',
   ])
   assert.deepEqual(groups[7], [
     'orchestration',
@@ -229,6 +263,9 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
     'task-supplied',
     '--question',
     'worker blocked',
+    '--from',
+    HANDLE,
+    '--json',
   ])
   assert.deepEqual(groups[8], [
     'orchestration',
@@ -237,9 +274,15 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
     'gate-supplied',
     '--resolution',
     'continue',
+    '--from',
+    HANDLE,
+    '--json',
   ])
-  assert.deepEqual(groups[9], ['status'])
-  assert.deepEqual(groups[10], ['orchestration', 'task-list', '--run', 'run-supplied'])
+  assert.deepEqual(groups[9], ['status', '--json'])
+  assert.equal(groups[9]?.includes(HANDLE), false)
+  assert.deepEqual(groups[10], ['orchestration', 'task-list', '--run', 'run-supplied', '--json'])
+  assert.equal(groups[10]?.includes('--from'), false)
+  assert.equal(groups[10]?.includes('--terminal'), false)
   const flat = groups.flat()
   assert.equal(flat.includes('--goal'), false)
   assert.equal(flat.includes('--repo'), false)
@@ -254,28 +297,48 @@ test('live spawn parses ids from a fake binary and does not invent missing ones'
 })
 
 test('linux live spawn falls back to orca-ide', async () => {
-  const { dir } = install('orca-ide', 'printf \'run-id: run-ide\\n\'\n')
+  const { dir } = install('orca-ide', `${emit({ run: { id: 'run-ide' } })}\n`)
   const adapter = liveAdapter(dir)
   assert.equal(adapter.executable, path.join(dir, 'orca-ide'))
   const run = asLive(await adapter.runCreate({ goal: 'dig', repo: 'repo' }))
   assert.equal(run.ids.runId, 'run-ide')
 })
 
-test('an extra parsed id is kept and a caller id is not added', async () => {
-  const { dir } = install('orca', 'printf \'run-id: run-abc\\ntask-id: task-extra\\n\'\n')
+test('run-create keeps result.run.id and drops the envelope id and other ids', async () => {
+  const body = JSON.stringify(
+    {
+      id: 'rpc_not_a_run',
+      ok: true,
+      result: {
+        run: { id: 'run_2e83440fda21', objective: 'smoke parse sample' },
+        task: { id: 'task-extra' },
+      },
+      _meta: { runtimeId: 'rt_1' },
+    },
+    null,
+    2,
+  )
+  const { dir } = install('orca', `cat <<'ENDJSON'\n${body}\nENDJSON\n`)
   const adapter = liveAdapter(dir)
-  const run = asLive(await adapter.runCreate({ goal: 'dig', repo: 'repo' }))
-  assert.deepEqual(run.ids, { runId: 'run-abc', taskId: 'task-extra' })
+  const run = asLive(await adapter.runCreate({ goal: 'dig', repo: 'repo', baseRef: 'run-supplied' }))
+  assert.deepEqual(run.ids, { runId: 'run_2e83440fda21' })
+  assert.equal(Object.hasOwn(run.ids, 'taskId'), false)
+  assert.equal(JSON.stringify(run).includes('rpc_not_a_run'), false)
+  assert.equal(JSON.stringify(run).includes('run-supplied'), false)
 })
 
 test('unparseable stdout throws and does not invent an id', async () => {
+  const prose = 'Run run_57808dafd589 created and bound: smoke parse sample\\n'
   const cases = [
+    `printf '${prose}'\n`,
     'printf \'not a field\\n\'\n',
     'printf \'\\n\'\n',
-    'printf \'task-id: task-abc\\n\'\n',
-    'printf \'run-id: run-abc\\nrun-id: run-other\\n\'\n',
-    'printf \'run-id:\\n\'\n',
-    'printf \'run-id: run abc\\n\'\n',
+    'printf \'run-id: run-abc\\n\'\n',
+    `printf '%s\\n' ${JSON.stringify(JSON.stringify({ ok: false, result: { run: { id: 'run-abc' } } }))}\n`,
+    `printf '%s\\n' ${JSON.stringify(JSON.stringify({ ok: true, id: 'rpc_not_a_run' }))}\n`,
+    `printf '%s\\n' ${JSON.stringify(JSON.stringify({ ok: true, result: { run: {} } }))}\n`,
+    `printf '%s\\n' ${JSON.stringify(JSON.stringify({ ok: true, result: { run: { id: 'run abc' } } }))}\n`,
+    `printf '%s\\n' ${JSON.stringify(JSON.stringify({ ok: 'true', result: { run: { id: 'run-abc' } } }))}\n`,
   ]
   for (const body of cases) {
     const { dir } = install('orca', body)
@@ -288,6 +351,8 @@ test('unparseable stdout throws and does not invent an id', async () => {
         assert.equal(Object.hasOwn(error, 'ids'), false)
         assert.equal(Object.hasOwn(error, 'runId'), false)
         assert.equal(errorText(error).includes('run-abc'), false)
+        assert.equal(errorText(error).includes('run_57808dafd589'), false)
+        assert.equal(errorText(error).includes('rpc_not_a_run'), false)
         assert.equal(errorText(error).includes('task-abc'), false)
         return true
       },
@@ -305,7 +370,7 @@ test('unparseable stdout throws and does not invent an id', async () => {
 })
 
 test('non-zero exit throws and does not return stdout ids', async () => {
-  const { dir } = install('orca', 'printf \'run-id: run-abc\\n\'\nexit 3\n')
+  const { dir } = install('orca', `${emit({ run: { id: 'run-abc' } })}\nexit 3\n`)
   const adapter = liveAdapter(dir)
   await assert.rejects(
     () => adapter.runCreate({ goal: 'dig', repo: 'hsliuustc0106/OPC-ORCA' }),
@@ -347,6 +412,85 @@ test('live mode with no binary throws not-configured and does not succeed', asyn
   assert.equal(resolved, false)
   await assert.rejects(() => adapter.workerStart({ taskId: 'task-1' }), OrcaNotConfiguredError)
   assert.deepEqual(adapter.planned, [])
+})
+
+test('a live sender verb without a handle fails closed and does not spawn', async () => {
+  const { dir, log } = install('orca', successBody)
+  const adapter = liveAdapter(dir, { handle: null })
+  await assert.rejects(
+    () => adapter.runCreate({ goal: 'dig', repo: 'repo' }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaNoSenderError)
+      assert.equal(error.code, 'no-sender')
+      assert.match(error.message, /ORCA_TERMINAL_HANDLE/)
+      assert.match(error.message, /Refusing to invent one/)
+      assert.equal(errorText(error).includes('term_'), false)
+      assert.equal(errorText(error).includes('run-abc'), false)
+      assert.equal(Object.hasOwn(error, 'runId'), false)
+      return true
+    },
+  )
+  assert.equal(existsSync(log), false)
+  assert.deepEqual(adapter.planned, [])
+  const blankEnv = liveAdapter(dir, { handle: '   ' })
+  await assert.rejects(() => blankEnv.runCreate({ goal: 'dig', repo: 'repo' }), OrcaNoSenderError)
+  assert.equal(existsSync(log), false)
+  await assert.rejects(() => adapter.check({ runId: 'run-1', converged: false }), OrcaNoSenderError)
+  await assert.rejects(() => adapter.taskCreate({ runId: 'run-1', spec: 'dig' }), OrcaNoSenderError)
+  await assert.rejects(() => adapter.workerStart({ taskId: 'task-1', runId: 'run-1' }), OrcaNoSenderError)
+  const shown = asLive(await adapter.workerShow({ workerId: 'worker-1' }))
+  assert.equal(shown.ids.workerId, 'worker-abc')
+  const observed = asLive(await adapter.status())
+  assert.equal(observed.fields.status, 'ready')
+  assert.equal(existsSync(log), true)
+  const spawned = readFileSync(log, 'utf8')
+  assert.equal(spawned.includes('run-create'), false)
+  assert.equal(spawned.includes('--from'), false)
+  assert.equal(spawned.includes('--terminal'), false)
+})
+
+test('from wins over ORCA_TERMINAL_HANDLE and a bad token does not spawn', async () => {
+  const { dir, log } = install('orca', successBody)
+  const adapter = liveAdapter(dir, { from: 'term_config' })
+  const run = asLive(await adapter.runCreate({ goal: 'dig', repo: 'repo' }))
+  assert.equal(run.ids.runId, 'run-abc')
+  const argv = readFileSync(log, 'utf8')
+  assert.match(argv, /--from\nterm_config\n/)
+  assert.equal(argv.includes(HANDLE), false)
+  assert.equal(argv.includes('--terminal'), false)
+
+  const blank = liveAdapter(dir, { handle: 'term_env', from: '   ' })
+  const again = asLive(await blank.runCreate({ goal: 'dig', repo: 'repo' }))
+  assert.equal(again.ids.runId, 'run-abc')
+  assert.match(readFileSync(log, 'utf8'), /--from\nterm_env\n/)
+
+  const bad = install('orca', 'printf \'run-id: run-abc\\n\'\n')
+  const rejected = liveAdapter(bad.dir, { from: 'term bad' })
+  await assert.rejects(
+    () => rejected.runCreate({ goal: 'dig', repo: 'repo' }),
+    (error: unknown) => {
+      assert.ok(error instanceof OrcaNoSenderError)
+      assert.equal(error.code, 'no-sender')
+      assert.equal(errorText(error).includes('term bad'), false)
+      assert.equal(errorText(error).includes('term_env'), false)
+      return true
+    },
+  )
+  assert.equal(existsSync(bad.log), false)
+
+  const beforeDry = readFileSync(log, 'utf8').length
+  const dry = createOrcaAdapter({
+    dryRun: true,
+    from: 'term_config',
+    env: { PATH: dir, ORCA_TERMINAL_HANDLE: HANDLE, OPC_ORCA_LIVE: '1' },
+    platform: 'linux',
+  })
+  const planned = await dry.runCreate({ goal: 'dig', repo: 'repo', baseRef: 'origin/main' })
+  assert.equal(planned.dryRun, true)
+  if (planned.dryRun !== true) assert.fail('expected a dry-run plan')
+  assert.deepEqual(planned.args, { goal: 'dig', repo: 'repo', base: 'origin/main' })
+  assert.equal(Object.hasOwn(planned.args, 'from'), false)
+  assert.equal(readFileSync(log, 'utf8').length, beforeDry)
 })
 
 test('child_process stays inside the live spawn module', () => {

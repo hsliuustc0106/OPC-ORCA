@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 
-import { OrcaNotConfiguredError } from '@opc-orca/orca-adapter'
+import { OrcaNoSenderError, OrcaNotConfiguredError, OrcaParseError } from '@opc-orca/orca-adapter'
 
 import { apply, inject, name } from '../index.js'
 
@@ -156,6 +159,38 @@ test('operator setting wins over a dig caller live true', async () => {
   assert.equal(easyLive.path, 'coordinator-direct')
   assert.equal(easyLive.githubWritePerformed, false)
   assert.notEqual(easyLive.state, 'awaiting_human_pr')
+})
+
+test('plugin config from is the handle and a tool argument is not', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'orca-plugin-'))
+  const log = path.join(dir, 'spawn.log')
+  const file = path.join(dir, 'orca')
+  writeFileSync(
+    file,
+    `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\nprintf 'Run run_57808dafd589 created and bound: smoke parse sample\\n'\n`,
+  )
+  chmodSync(file, 0o755)
+  const env = { PATH: dir, OPC_ORCA_LIVE: '1' }
+
+  const missing = host()
+  apply(missing.ctx, { env })
+  await assert.rejects(() => missing.tools[0].execute({ goal: 'fix the gate', repo }), OrcaNoSenderError)
+  assert.equal(existsSync(log), false)
+
+  const loaded = host()
+  apply(loaded.ctx, { env, from: 'term_config' })
+  await assert.rejects(
+    () => loaded.tools[0].execute({ goal: 'fix the gate', repo, from: 'term_caller' }),
+    (error) => {
+      assert.ok(error instanceof OrcaParseError)
+      assert.equal(JSON.stringify(error).includes('run_57808dafd589'), false)
+      return true
+    },
+  )
+  const spawned = readFileSync(log, 'utf8')
+  assert.match(spawned, /--from\nterm_config\n--json\n/)
+  assert.equal(spawned.includes('term_caller'), false)
+  assert.equal(loaded.tools[0].parameters.from, undefined)
 })
 
 test('apply requires the tool registry and tolerates a host with no logger', () => {

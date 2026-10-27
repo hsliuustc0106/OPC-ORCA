@@ -2,7 +2,7 @@
 
 DSH plugin for OPC-ORCA. DeepSeek Harness is the entrance; this plugin is the piece Harness loads. It registers one tool, `dig`: a goal goes in, the coordinator runs, and a status summary comes out. The default is dry-run. Live spawn is operator-owned. It runs only when `OPC_ORCA_LIVE=1` and this plugin's config `live` is not `false`. A tool caller passing `live: true` does not grant spawn. `config.live: true` does not replace the env var. `live: false` from the caller or from config forces dry-run. The tool stops before the human PR gate. It does not open, update, or merge a pull request.
 
-The operator procedure on a Mac (Orca desktop, dry-run, then live) is [local test](../../docs/local-test.md). CLI flag names to confirm during that run are in [`packages/orca-adapter/src/cli.ts`](../../packages/orca-adapter/src/cli.ts).
+The operator procedure on a Mac (Orca desktop, dry-run, then live) is [local test](../../docs/local-test.md). CLI flag names to confirm during that run are in [`packages/orca-adapter/src/cli.ts`](../../packages/orca-adapter/src/cli.ts). Plugin config `from` is the coordinator terminal handle for a live dig. It wins over `ORCA_TERMINAL_HANDLE`. The dig tool arguments do not set it.
 
 The install line matches the [FlyBot](https://github.com/ThinkFlowLab/FlyBot) `dsh plugin add` form (`github:<owner>/<repo>#<ref>&path:<dir>`). It is a placeholder until the scaffold is on `main`. Installing it before that either fails or loads a repo that has no plugin.
 
